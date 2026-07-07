@@ -40,6 +40,7 @@ impl TuiViewportedElement for FakeContent {
         &self,
         window: TuiViewportWindow,
         available_width: u16,
+        _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiViewportContent {
         self.requests.borrow_mut().push(window);
@@ -389,6 +390,7 @@ impl TuiViewportedElement for SingleElementContent {
         &self,
         _window: TuiViewportWindow,
         _available_width: u16,
+        _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiViewportContent {
         TuiViewportContent {

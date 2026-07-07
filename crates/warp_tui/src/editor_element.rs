@@ -79,9 +79,6 @@ pub(crate) struct GutterConfig {
 
 impl GutterConfig {
     /// A gutter sized to the buffer's largest line number.
-    // Consumed by the TUI diff view (stacked on this branch); exercised by
-    // this crate's element tests until then.
-    #[allow(dead_code)]
     pub(crate) fn line_numbers() -> Self {
         Self { width: None }
     }
@@ -208,16 +205,11 @@ impl TuiEditorElement {
 
     /// Render a line-number gutter: numbers on a buffer line's first row,
     /// blanks on continuation/ghost/gap rows.
-    // Consumed by the TUI diff view (stacked on this branch); exercised by
-    // this crate's element tests until then.
-    #[allow(dead_code)]
     pub(crate) fn with_gutter(mut self, gutter: GutterConfig) -> Self {
         self.gutter = Some(gutter);
         self
     }
 
-    // Consumed by the TUI diff view (stacked on this branch).
-    #[allow(dead_code)]
     pub(crate) fn with_styles(mut self, styles: TuiEditorStyles) -> Self {
         self.styles = styles;
         self
@@ -230,9 +222,6 @@ impl TuiEditorElement {
     ///
     /// Structural extras like this one are appended to the hidden set that
     /// both painting and hit-testing use, so the two stay consistent.
-    // Consumed by the TUI diff view (stacked on this branch); exercised by
-    // this crate's element tests until then.
-    #[allow(dead_code)]
     pub(crate) fn hide_trailing_empty_line(mut self) -> Self {
         if self.text.ends_with('\n') {
             let last_line = self.text.split('\n').count() - 1;
