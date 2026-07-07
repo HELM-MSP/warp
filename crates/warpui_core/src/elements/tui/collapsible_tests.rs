@@ -33,11 +33,11 @@ fn only_a_header_click_invokes_on_toggle() {
             collapsible.layout(TuiConstraint::loose(TuiSize::new(20, 4)), &mut ctx, app_ctx);
             // A click is a press-then-release pair; the hoverable's arming
             // notify needs an origin view to attribute the redraw to.
-            let mut click = |y| {
+            let mut click = |x, y| {
                 let mut event_ctx = TuiEventContext::default();
                 event_ctx.set_origin_view(Some(EntityId::new()));
                 let down = TuiEvent::LeftMouseDown {
-                    position: TuiPoint::new(2, y),
+                    position: TuiPoint::new(x, y),
                     modifiers: ModifiersState::default(),
                     click_count: 1,
                     is_first_mouse: false,
@@ -45,7 +45,7 @@ fn only_a_header_click_invokes_on_toggle() {
                 let pressed =
                     collapsible.dispatch_event(&down, area, &mut event_ctx, &mut ctx, app_ctx);
                 let up = TuiEvent::LeftMouseUp {
-                    position: TuiPoint::new(2, y),
+                    position: TuiPoint::new(x, y),
                     modifiers: ModifiersState::default(),
                 };
                 let released =
@@ -55,9 +55,14 @@ fn only_a_header_click_invokes_on_toggle() {
 
             // Row 0 is the header: the click toggles. Row 1 is the body: the
             // header's handler covers only its own slot, so it goes unhandled.
-            assert!(click(0));
+            assert!(click(2, 0));
             assert_eq!(hits.get(), 1);
-            assert!(!click(1));
+            assert!(!click(2, 1));
+            assert_eq!(hits.get(), 1);
+
+            // The blank space right of the label + chevron ("Thinking... ▾"
+            // spans 13 columns) is not part of the click target.
+            assert!(!click(15, 0));
             assert_eq!(hits.get(), 1);
         });
     });

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use super::TuiHoverable;
 use crate::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPoint, TuiRect,
-    TuiSize,
+    TuiSize, TuiText,
 };
 use crate::elements::MouseStateHandle;
 use crate::event::ModifiersState;
@@ -182,6 +182,55 @@ fn release_outside_area_cancels_the_click() {
             assert!(!handled);
             assert!(!state.lock().unwrap().is_clicked());
             assert_eq!(hits.get(), 0);
+        });
+    });
+}
+
+#[test]
+fn hit_testing_is_bounded_to_the_child_laid_out_size() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let hits = Rc::new(Cell::new(0u32));
+            let counter = hits.clone();
+            let handle = MouseStateHandle::default();
+            // "hello" lays out to 5 columns even though the slot is 10 wide.
+            let mut hoverable =
+                TuiHoverable::new(handle.clone(), TuiText::new("hello").finish()).on_click(
+                    move |_ctx, _app| {
+                        counter.set(counter.get() + 1);
+                    },
+                );
+
+            let area = TuiRect::new(0, 0, 10, 1);
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            hoverable.layout(TuiConstraint::loose(TuiSize::new(10, 1)), &mut ctx, app_ctx);
+            let mut dispatch = |event: TuiEvent| {
+                let mut event_ctx = TuiEventContext::default();
+                event_ctx.set_origin_view(Some(EntityId::new()));
+                hoverable.dispatch_event(&event, area, &mut event_ctx, &mut ctx, app_ctx)
+            };
+            let mouse_moved = |x, y| TuiEvent::MouseMoved {
+                position: TuiPoint::new(x, y),
+                modifiers: ModifiersState::default(),
+                is_synthetic: false,
+            };
+
+            // Within the text: hover registers, and a press-then-release
+            // click fires the handler.
+            dispatch(mouse_moved(2, 0));
+            assert!(handle.lock().unwrap().is_hovered());
+            assert!(dispatch(left_mouse_down(2, 0)));
+            assert!(dispatch(left_mouse_up(2, 0)));
+            assert_eq!(hits.get(), 1);
+
+            // In the slot but right of the text: neither registers.
+            dispatch(mouse_moved(7, 0));
+            assert!(!handle.lock().unwrap().is_hovered());
+            assert!(!dispatch(left_mouse_down(7, 0)));
+            assert_eq!(hits.get(), 1);
         });
     });
 }

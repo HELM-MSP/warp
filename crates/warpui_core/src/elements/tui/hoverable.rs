@@ -13,17 +13,21 @@
 //! are transparent — they delegate to the wrapped child.
 //!
 //! # Dispatch policy
-//! On [`MouseMoved`](TuiEvent::MouseMoved) the pointer position is compared
-//! against this element's area; a hover transition is recorded on the handle
-//! and queues a notification so the owning view re-renders. Mouse moves are
-//! never consumed, so sibling hoverables observe their own transitions from
-//! the same event. Other events are offered to the child first; clicks use the
-//! GUI's press-then-release pairing: an unconsumed
-//! [`LeftMouseDown`](TuiEvent::LeftMouseDown) inside the area arms a pending
-//! click (recorded on the shared state, so [`MouseState::is_clicked`] styling
-//! works) and is consumed; the following [`LeftMouseUp`](TuiEvent::LeftMouseUp)
-//! disarms it, running the click handler only when released inside the area.
-//! (Hover delays and the other [`MouseState`] fields are unused.)
+//! Hover and click hit-test against the child's laid-out footprint (the size
+//! returned by the most recent `layout`, anchored at the area's origin), not
+//! the whole slot the parent assigned — so trailing blank space in a flex row
+//! is not part of the target. On [`MouseMoved`](TuiEvent::MouseMoved) the
+//! pointer position is compared against that footprint; a hover transition is
+//! recorded on the handle and queues a notification so the owning view
+//! re-renders. Mouse moves are never consumed, so sibling hoverables observe
+//! their own transitions from the same event. Other events are offered to the
+//! child first; clicks use the GUI's press-then-release pairing: an unconsumed
+//! [`LeftMouseDown`](TuiEvent::LeftMouseDown) inside the footprint arms a
+//! pending click (recorded on the shared state, so [`MouseState::is_clicked`]
+//! styling works) and is consumed; the following
+//! [`LeftMouseUp`](TuiEvent::LeftMouseUp) disarms it, running the click
+//! handler only when released inside the footprint. (Hover delays and the
+//! other [`MouseState`] fields are unused.)
 
 use std::sync::MutexGuard;
 
@@ -40,6 +44,9 @@ pub struct TuiHoverable {
     child: Box<dyn TuiElement>,
     state: MouseStateHandle,
     on_click: Option<ClickCallback>,
+    /// Size from the most recent `layout`, bounding hover/click hit-testing
+    /// to the child's content rather than the parent's whole slot.
+    laid_out: Option<TuiSize>,
 }
 
 impl TuiHoverable {
@@ -49,6 +56,7 @@ impl TuiHoverable {
             child,
             state,
             on_click: None,
+            laid_out: None,
         }
     }
 
@@ -67,6 +75,26 @@ impl TuiHoverable {
     fn state(&self) -> MutexGuard<'_, MouseState> {
         self.state.lock().unwrap()
     }
+
+    /// The child's laid-out footprint within `area`, used for hit-testing.
+    /// Falls back to the whole area before the first `layout`.
+    ///
+    /// The footprint keeps `area`'s top-left corner, which is correct because
+    /// all current TUI parents paint a child at the top-left of its slot. If a
+    /// parent ever paints a child at an offset within its slot (e.g. a flex
+    /// with center/end cross-axis alignment), that parent must pass the
+    /// offset rect down as `area` — only it knows where the child landed.
+    fn hit_area(&self, area: TuiRect) -> TuiRect {
+        match self.laid_out {
+            Some(size) => TuiRect::new(
+                area.x,
+                area.y,
+                area.width.min(size.width),
+                area.height.min(size.height),
+            ),
+            None => area,
+        }
+    }
 }
 
 impl TuiElement for TuiHoverable {
@@ -76,7 +104,9 @@ impl TuiElement for TuiHoverable {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiSize {
-        self.child.layout(constraint, ctx, app)
+        let size = self.child.layout(constraint, ctx, app);
+        self.laid_out = Some(size);
+        size
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
@@ -100,9 +130,10 @@ impl TuiElement for TuiHoverable {
         app: &AppContext,
     ) -> bool {
         let child_handled = self.child.dispatch_event(event, area, event_ctx, ctx, app);
+        let hit_area = self.hit_area(area);
 
         if let TuiEvent::MouseMoved { position, .. } = event {
-            let is_hovered = area.contains_point(*position);
+            let is_hovered = hit_area.contains_point(*position);
             let mut state = self.state();
             if is_hovered != state.is_hovered() {
                 state.is_hovered = is_hovered;
@@ -119,22 +150,22 @@ impl TuiElement for TuiHoverable {
         }
 
         match event {
-            // Press inside the area: arm the pending click.
+            // Press inside the footprint: arm the pending click.
             TuiEvent::LeftMouseDown {
                 position,
                 click_count,
                 ..
-            } if self.on_click.is_some() && area.contains_point(*position) => {
+            } if self.on_click.is_some() && hit_area.contains_point(*position) => {
                 self.state().set_click_count(Some(*click_count));
                 event_ctx.notify();
                 true
             }
             // Release while armed: disarm, and fire only when released inside
-            // the area (a release elsewhere cancels the click, as in the GUI).
+            // the footprint (a release elsewhere cancels the click, as in the GUI).
             TuiEvent::LeftMouseUp { position, .. } if self.state().is_clicked() => {
                 self.state().set_click_count(None);
                 event_ctx.notify();
-                if area.contains_point(*position) {
+                if hit_area.contains_point(*position) {
                     if let Some(on_click) = self.on_click.as_mut() {
                         on_click(event_ctx, app);
                     }

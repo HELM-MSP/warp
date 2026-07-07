@@ -4,8 +4,10 @@
 //! This is a plain composition of existing primitives: a [`TuiFlex`] column
 //! whose first child is the header (a [`TuiText`] of the label followed by a
 //! chevron reflecting the state, wrapped in a [`TuiHoverable`] for the click
-//! and hover tracking) and whose second child — present only when expanded —
-//! is the body. State is owned by the caller: `collapsed` and the hover state
+//! and hover tracking, so only the label + chevron — not the blank remainder
+//! of the row — is the hover/click target) and whose second child — present
+//! only when expanded — is the body. State is owned by the caller: `collapsed`
+//! and the hover state
 //! on `mouse_state` are read at composition time and `on_toggle` fires on a
 //! header click, leaving the caller to flip its own state and re-render.
 
