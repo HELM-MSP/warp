@@ -5,7 +5,7 @@ use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::App;
 
-use super::{render_warping_indicator, SPINNER_TIMELINE};
+use super::{render_response_summary, render_warping_indicator, SPINNER_TIMELINE};
 
 #[test]
 fn spinner_follows_the_prototype_choreography() {
@@ -69,6 +69,43 @@ fn renders_the_indicator_row_and_requests_a_repaint() {
 
             // The animated row must schedule the next repaint.
             assert!(frame.repaint_at.is_some());
+        });
+    });
+}
+
+#[test]
+fn response_summary_shows_duration_and_credits_without_repaints() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        app.read(|app_ctx| {
+            let element = render_response_summary(Duration::from_secs(5), Some(2.5), app_ctx);
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(element, TuiRect::new(0, 0, 30, 1), app_ctx);
+
+            let lines = frame.buffer.to_lines();
+            assert_eq!(lines[0].trim_end(), "∷ 5s • 2.5 credits");
+            // The resting row is static: no repaint scheduling.
+            assert!(frame.repaint_at.is_none());
+        });
+    });
+}
+
+#[test]
+fn response_summary_omits_credits_until_reported() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        app.read(|app_ctx| {
+            let mut presenter = TuiPresenter::new();
+            for block_credits in [None, Some(0.0)] {
+                let element =
+                    render_response_summary(Duration::from_secs(1), block_credits, app_ctx);
+                let frame = presenter.present_element(element, TuiRect::new(0, 0, 30, 1), app_ctx);
+                assert_eq!(frame.buffer.to_lines()[0].trim_end(), "∷ 1s");
+            }
         });
     });
 }
