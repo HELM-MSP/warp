@@ -147,6 +147,26 @@ impl TuiFlex {
         }
     }
 
+    /// Returns the child slots implied by the last layout pass: the leading
+    /// main-axis extent of each laid-out child, packed from the start of
+    /// `area`, stopping once the area is exhausted. Shared by `render`,
+    /// `cursor_position`, and `dispatch_event` so paint and hit-test geometry
+    /// cannot drift.
+    fn child_slots(
+        axis: Axis,
+        area: TuiRect,
+        child_sizes: &[TuiSize],
+    ) -> impl Iterator<Item = TuiRect> + '_ {
+        child_sizes.iter().scan(area, move |remaining, size| {
+            if remaining.is_empty() {
+                return None;
+            }
+            let (slot, rest) = Self::split_main(axis, *remaining, Self::main_extent(axis, *size));
+            *remaining = rest;
+            Some(slot)
+        })
+    }
+
     /// Clamps a main-axis extent into the constraint's main-axis bounds.
     fn constrain_main(axis: Axis, constraint: TuiConstraint, extent: u16) -> u16 {
         match axis {
@@ -336,28 +356,25 @@ impl TuiElement for TuiFlex {
     }
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
-        let mut remaining = area;
-        for (child, size) in self.children.iter().zip(&self.child_sizes) {
-            if remaining.is_empty() {
-                break;
-            }
-            let (slot, rest) =
-                Self::split_main(self.axis, remaining, Self::main_extent(self.axis, *size));
+        for ((child, size), slot) in self
+            .children
+            .iter()
+            .zip(&self.child_sizes)
+            .zip(Self::child_slots(self.axis, area, &self.child_sizes))
+        {
             child
                 .element
                 .render(self.child_rect(slot, *size), buffer, ctx);
-            remaining = rest;
         }
     }
 
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        let mut remaining = area;
-        for (child, size) in self.children.iter().zip(&self.child_sizes) {
-            if remaining.is_empty() {
-                break;
-            }
-            let (slot, rest) =
-                Self::split_main(self.axis, remaining, Self::main_extent(self.axis, *size));
+        for ((child, size), slot) in self
+            .children
+            .iter()
+            .zip(&self.child_sizes)
+            .zip(Self::child_slots(self.axis, area, &self.child_sizes))
+        {
             let rect = self.child_rect(slot, *size);
             if let Some((cx, cy)) = child.element.cursor_position(rect, ctx) {
                 // Offset is relative to the child's rect, not the full area.
@@ -366,7 +383,6 @@ impl TuiElement for TuiFlex {
                     rect.y.saturating_sub(area.y) + cy,
                 ));
             }
-            remaining = rest;
         }
         None
     }
@@ -390,12 +406,12 @@ impl TuiElement for TuiFlex {
         // Children clipped past the available extent see no events.
         let axis = self.axis;
         let alignment = self.cross_axis_alignment;
-        let mut remaining = area;
-        for (child, size) in self.children.iter_mut().zip(&self.child_sizes) {
-            if remaining.is_empty() {
-                break;
-            }
-            let (slot, rest) = Self::split_main(axis, remaining, Self::main_extent(axis, *size));
+        for ((child, size), slot) in self
+            .children
+            .iter_mut()
+            .zip(&self.child_sizes)
+            .zip(Self::child_slots(axis, area, &self.child_sizes))
+        {
             let rect = Self::child_rect_for(axis, alignment, slot, *size);
             if child
                 .element
@@ -403,7 +419,6 @@ impl TuiElement for TuiFlex {
             {
                 return true;
             }
-            remaining = rest;
         }
         false
     }

@@ -194,12 +194,10 @@ fn hit_testing_is_bounded_to_the_child_laid_out_size() {
             let counter = hits.clone();
             let handle = MouseStateHandle::default();
             // "hello" lays out to 5 columns even though the slot is 10 wide.
-            let mut hoverable =
-                TuiHoverable::new(handle.clone(), TuiText::new("hello").finish()).on_click(
-                    move |_ctx, _app| {
-                        counter.set(counter.get() + 1);
-                    },
-                );
+            let mut hoverable = TuiHoverable::new(handle.clone(), TuiText::new("hello").finish())
+                .on_click(move |_ctx, _app| {
+                    counter.set(counter.get() + 1);
+                });
 
             let area = TuiRect::new(0, 0, 10, 1);
             let mut rendered_views = EntityIdMap::default();

@@ -107,6 +107,18 @@ struct VisibleElement {
     element: TuiClipped,
 }
 
+impl VisibleElement {
+    /// Returns this item's rendered slot within the viewport area.
+    fn slot(&self, area: TuiRect) -> Option<TuiRect> {
+        let slot_y = area.y.saturating_add(self.viewport_y);
+        if slot_y >= area.bottom() {
+            return None;
+        }
+        let height = self.height.min(area.bottom() - slot_y);
+        Some(TuiRect::new(area.x, slot_y, area.width, height))
+    }
+}
+
 /// A variable-height viewport that delegates content slicing to its source.
 pub struct TuiViewportedList<Content>
 where
@@ -327,27 +339,21 @@ where
 
     fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
         for visible in &self.visible_elements {
-            let slot_y = area.y.saturating_add(visible.viewport_y);
-            if slot_y >= area.bottom() {
+            let Some(slot) = visible.slot(area) else {
                 continue;
-            }
-            let height = visible.height.min(area.bottom() - slot_y);
-            let slot = TuiRect::new(area.x, slot_y, area.width, height);
+            };
             visible.element.render(slot, buffer, ctx);
         }
     }
 
     fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
         for visible in &self.visible_elements {
-            let slot_y = area.y.saturating_add(visible.viewport_y);
-            if slot_y >= area.bottom() {
+            let Some(slot) = visible.slot(area) else {
                 continue;
-            }
-            let height = visible.height.min(area.bottom() - slot_y);
-            let slot = TuiRect::new(area.x, slot_y, area.width, height);
+            };
             let (x, y) = visible.element.cursor_position(slot, ctx)?;
-            if y < height {
-                return Some((x, slot_y.saturating_sub(area.y).saturating_add(y)));
+            if y < slot.height {
+                return Some((x, slot.y.saturating_sub(area.y).saturating_add(y)));
             }
         }
         None
@@ -368,12 +374,9 @@ where
         app: &AppContext,
     ) -> bool {
         for visible in &mut self.visible_elements {
-            let slot_y = area.y.saturating_add(visible.viewport_y);
-            if slot_y >= area.bottom() {
+            let Some(slot) = visible.slot(area) else {
                 continue;
-            }
-            let height = visible.height.min(area.bottom() - slot_y);
-            let slot = TuiRect::new(area.x, slot_y, area.width, height);
+            };
             if visible
                 .element
                 .dispatch_event(event, slot, event_ctx, ctx, app)
