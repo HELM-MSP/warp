@@ -22,6 +22,7 @@ use std::ops::Range;
 
 use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
+use warp::tui_export::AcceptSlashCommandOrSavedPrompt;
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::render::model::{
     char_cell_display_width, char_cell_line_gap_position, char_cell_line_row_starts, ColumnUnit,
@@ -39,6 +40,7 @@ use warpui_core::{AppContext, Entity, ModelHandle, TuiView, TypedActionView, Vie
 
 use super::kill_buffer::KillBuffer;
 use crate::keybindings::TUI_BINDING_GROUP;
+use crate::slash_commands::TuiSlashCommandModel;
 
 /// Logical rows scrolled per mouse-wheel notch (matches `TuiScrollable`).
 const WHEEL_STEP: isize = 2;
@@ -94,6 +96,14 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("TuiInputView"))
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("alt-enter"),
+        EditableBinding::new(
+            "tui:input:dismiss_slash_commands",
+            "Dismiss slash commands",
+            TuiInputAction::DismissSlashCommands,
+        )
+        .with_context_predicate(id!("TuiInputView"))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("escape"),
         // ── Deletion ───────────────────────────────────────────────────
         EditableBinding::new(
             "tui:input:backspace",
@@ -447,6 +457,8 @@ pub fn init(app: &mut AppContext) {
 pub enum TuiInputViewEvent {
     /// The user pressed Enter to submit the current input. Contains the final text.
     Submitted(String),
+    /// The user selected a slash command menu item.
+    AcceptedSlashCommand(AcceptSlashCommandOrSavedPrompt),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -464,6 +476,8 @@ pub enum TuiInputAction {
     InsertNewline,
     /// Submit the current input (`Enter`).
     Submit,
+    /// Dismiss an open slash command menu (`Escape`).
+    DismissSlashCommands,
     /// Delete the character before the cursor (`Backspace`, `Ctrl+H`).
     Backspace,
     /// Delete the character after the cursor (`Delete`, `Ctrl+D`).
@@ -537,6 +551,8 @@ pub enum TuiInputAction {
 pub struct TuiInputView {
     /// The backing code editor in char-cell (terminal) mode.
     model: ModelHandle<CodeEditorModel>,
+    /// Optional slash command state model used to route menu keyboard actions.
+    slash_commands: Option<ModelHandle<TuiSlashCommandModel>>,
     /// Single-entry kill buffer for `Ctrl+K` / `Ctrl+U` / `Ctrl+Y`.
     kill_buffer: KillBuffer,
     /// First visible visual row (0-indexed).
@@ -560,6 +576,14 @@ impl TuiInputView {
     /// Subscribes to [`CodeEditorModelEvent::ContentChanged`] to trigger re-renders
     /// whenever the buffer changes from outside `handle_action`.
     pub fn new(model: ModelHandle<CodeEditorModel>, ctx: &mut ViewContext<Self>) -> Self {
+        Self::new_with_slash_commands(model, None, ctx)
+    }
+
+    pub(crate) fn new_with_slash_commands(
+        model: ModelHandle<CodeEditorModel>,
+        slash_commands: Option<ModelHandle<TuiSlashCommandModel>>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
         ctx.subscribe_to_model(&model, |_, _, event, ctx| {
             if matches!(event, CodeEditorModelEvent::ContentChanged { .. }) {
                 ctx.notify();
@@ -567,6 +591,7 @@ impl TuiInputView {
         });
         Self {
             model,
+            slash_commands,
             kill_buffer: KillBuffer::default(),
             scroll_offset: 0,
             max_visible_rows: 6,
@@ -637,6 +662,9 @@ impl TypedActionView for TuiInputView {
     type Action = TuiInputAction;
 
     fn handle_action(&mut self, action: &TuiInputAction, ctx: &mut ViewContext<Self>) {
+        if self.handle_slash_command_action(action, ctx) {
+            return;
+        }
         match action {
             TuiInputAction::InsertChar(c) => {
                 let s = c.to_string();
@@ -646,6 +674,7 @@ impl TypedActionView for TuiInputView {
                 self.model.update(ctx, |m, ctx| m.user_insert("\n", ctx));
             }
             TuiInputAction::Submit => self.submit(ctx),
+            TuiInputAction::DismissSlashCommands => {}
             TuiInputAction::Backspace => {
                 self.model.update(ctx, |m, ctx| m.backspace(ctx));
             }
@@ -926,6 +955,50 @@ impl TuiInputView {
         let text = self.plain_text(ctx);
         ctx.emit(TuiInputViewEvent::Submitted(text));
         self.clear(ctx);
+    }
+
+    fn handle_slash_command_action(
+        &mut self,
+        action: &TuiInputAction,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !matches!(
+            action,
+            TuiInputAction::MoveUp
+                | TuiInputAction::MoveDown
+                | TuiInputAction::Submit
+                | TuiInputAction::DismissSlashCommands
+        ) {
+            return false;
+        }
+        let Some(slash_commands) = self.slash_commands.clone() else {
+            return false;
+        };
+        if !slash_commands.as_ref(ctx).is_open() {
+            return false;
+        }
+
+        match action {
+            TuiInputAction::MoveUp => {
+                slash_commands.update(ctx, |model, ctx| model.select_previous(ctx));
+            }
+            TuiInputAction::MoveDown => {
+                slash_commands.update(ctx, |model, ctx| model.select_next(ctx));
+            }
+            TuiInputAction::Submit => {
+                let selected_action = slash_commands.as_ref(ctx).selected_action();
+                slash_commands.update(ctx, |model, ctx| model.dismiss(ctx));
+                if let Some(selected_action) = selected_action {
+                    ctx.emit(TuiInputViewEvent::AcceptedSlashCommand(selected_action));
+                }
+            }
+            TuiInputAction::DismissSlashCommands => {
+                slash_commands.update(ctx, |model, ctx| model.dismiss(ctx));
+            }
+            _ => return false,
+        }
+        ctx.notify();
+        true
     }
 
     // ── Kill / yank ───────────────────────────────────────────────────────────

@@ -43,6 +43,7 @@ use crate::ui::abbreviate_home_prefix;
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
+const MAX_SLASH_MENU_ROWS: u16 = 10;
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
 const CTRL_C_EXIT_HINT: &str = "ctrl-c again to exit";
@@ -226,8 +227,14 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
-        let input_view =
-            ctx.add_typed_action_tui_view(move |ctx| TuiInputView::new(input_editor_model, ctx));
+        let slash_commands_for_input = slash_commands.clone();
+        let input_view = ctx.add_typed_action_tui_view(move |ctx| {
+            TuiInputView::new_with_slash_commands(
+                input_editor_model,
+                Some(slash_commands_for_input),
+                ctx,
+            )
+        });
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
             TuiInputViewEvent::Submitted(prompt) => {
                 let prompt = prompt.trim().to_owned();
@@ -235,6 +242,9 @@ impl TuiTerminalSessionView {
                     view.send_prompt(prompt, ctx);
                     ctx.notify();
                 }
+            }
+            TuiInputViewEvent::AcceptedSlashCommand(action) => {
+                log::debug!("Accepted TUI slash command menu item: {action:?}");
             }
         });
 
@@ -491,7 +501,7 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let _slash_commands_open = self.slash_commands.as_ref(ctx).is_open();
+        let slash_command_menu = self.slash_commands.as_ref(ctx).render_menu(ctx);
         let input_box = TuiConstrainedBox::new(
             TuiContainer::new(TuiChildView::new(&self.input_view).finish())
                 .with_border_style(TuiUiBuilder::from_app(ctx).accent_border_style())
@@ -502,19 +512,21 @@ impl TuiView for TuiTerminalSessionView {
         // Ctrl-c (cancel/clear/exit) is handled by the keymap pass via the
         // fixed binding registered in [`Self::init`], so no element-level key
         // handling is needed here.
-        TuiContainer::new(
-            TuiFlex::column()
-                .flex_child(TuiChildView::new(&self.transcript).finish())
-                .child(input_box.finish())
-                .child(
-                    TuiConstrainedBox::new(self.render_footer(ctx).finish())
-                        .with_max_rows(1)
-                        .finish(),
-                )
+        let mut content =
+            TuiFlex::column().flex_child(TuiChildView::new(&self.transcript).finish());
+        if let Some(menu) = slash_command_menu {
+            content = content.child(
+                TuiConstrainedBox::new(menu)
+                    .with_max_rows(MAX_SLASH_MENU_ROWS)
+                    .finish(),
+            );
+        }
+        content = content.child(input_box.finish()).child(
+            TuiConstrainedBox::new(self.render_footer(ctx).finish())
+                .with_max_rows(1)
                 .finish(),
-        )
-        .with_padding(2)
-        .finish()
+        );
+        TuiContainer::new(content.finish()).with_padding(2).finish()
     }
 }
 
