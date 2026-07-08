@@ -437,7 +437,7 @@ impl SlashCommandDataSource {
     //
     // If the slash command has an argument, it matches only if its an exact match, or if the argument
     // is space-delimited.
-    fn parse_slash_command(&self, buffer: &str) -> Option<DetectedCommand> {
+    pub fn parse_slash_command(&self, buffer: &str) -> Option<DetectedCommand> {
         let (possible_command, possible_argument) =
             if let Some((command, argument)) = buffer.split_once(" ") {
                 (command, Some(argument.to_owned()))

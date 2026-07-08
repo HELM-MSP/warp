@@ -616,6 +616,15 @@ impl TuiInputView {
         ctx.notify();
     }
 
+    pub(crate) fn set_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |m, ctx| {
+            m.clear_buffer(ctx);
+            m.user_insert(text, ctx);
+        });
+        self.scroll_offset = 0;
+        ctx.notify();
+    }
+
     /// Builds the concrete `TuiInputElement` for this frame. `render` wraps it in
     /// a `Box`; tests construct it directly to exercise mouse dispatch.
     ///

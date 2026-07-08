@@ -9,8 +9,9 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
 use warp::tui_export::{
-    slash_command_composition_filter, slash_command_query, AcceptSlashCommandOrSavedPrompt,
-    SlashCommandDataSource, SlashCommandMixer, UpdatedActiveCommands,
+    slash_command_composition_filter, slash_command_query, slash_command_selection_behavior,
+    AcceptSlashCommandOrSavedPrompt, SlashCommandDataSource, SlashCommandMixer,
+    SlashCommandSelectionBehavior, UpdatedActiveCommands,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiText};
@@ -49,6 +50,7 @@ pub(crate) struct TuiSlashCommandModelEvent;
 
 pub(crate) struct TuiSlashCommandModel {
     input_editor: ModelHandle<CodeEditorModel>,
+    slash_commands_source: ModelHandle<SlashCommandDataSource>,
     mixer: ModelHandle<SlashCommandMixer>,
     state: TuiSlashCommandState,
 }
@@ -81,6 +83,7 @@ impl TuiSlashCommandModel {
 
         let mut model = Self {
             input_editor,
+            slash_commands_source,
             mixer,
             state: TuiSlashCommandState::Closed,
         };
@@ -170,12 +173,10 @@ impl TuiSlashCommandModel {
         let builder = TuiUiBuilder::from_app(app);
         let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         if rows.is_empty() {
-            let label = if *is_loading {
-                "Loading slash commands…"
-            } else {
-                "No slash commands found"
-            };
-            column = column.child(menu_status_row(label, &builder));
+            if *is_loading {
+                return None;
+            }
+            column = column.child(menu_status_row("No slash commands found", &builder));
         } else {
             for (index, row) in rows
                 .iter()
@@ -200,31 +201,51 @@ impl TuiSlashCommandModel {
             self.close(ctx);
             return;
         };
+        if let Some(detected_command) = self
+            .slash_commands_source
+            .as_ref(ctx)
+            .parse_slash_command(&input)
+        {
+            let is_argument_entry = detected_command.argument.is_some();
+            let executes_on_selection = matches!(
+                slash_command_selection_behavior(&detected_command.command),
+                SlashCommandSelectionBehavior::Execute
+            );
+            if is_argument_entry || executes_on_selection {
+                self.close(ctx);
+                return;
+            }
+        }
         self.run_query(query, false, ctx);
     }
 
     fn run_query(&mut self, query: String, force: bool, ctx: &mut ModelContext<Self>) {
-        let (previous_query_matches, previous_selected_index, previous_scroll_offset) =
-            match &self.state {
-                TuiSlashCommandState::Closed => (false, 0, 0),
-                TuiSlashCommandState::Open {
-                    query: previous_query,
-                    selected_index,
-                    scroll_offset,
-                    ..
-                } => (previous_query == &query, *selected_index, *scroll_offset),
-            };
-        let select_last_result_on_refresh = query.is_empty() && !previous_query_matches;
-        let scroll_offset = if select_last_result_on_refresh {
-            0
-        } else {
-            previous_scroll_offset
+        let (
+            previous_query_matches,
+            previous_rows,
+            previous_selected_index,
+            previous_scroll_offset,
+        ) = match &self.state {
+            TuiSlashCommandState::Closed => (false, Vec::new(), 0, 0),
+            TuiSlashCommandState::Open {
+                query: previous_query,
+                rows,
+                selected_index,
+                scroll_offset,
+                ..
+            } => (
+                previous_query == &query,
+                rows.clone(),
+                *selected_index,
+                *scroll_offset,
+            ),
         };
+        let select_last_result_on_refresh = !previous_query_matches;
         self.state = TuiSlashCommandState::Open {
             query: query.clone(),
-            rows: Vec::new(),
+            rows: previous_rows,
             selected_index: previous_selected_index,
-            scroll_offset,
+            scroll_offset: previous_scroll_offset,
             select_last_result_on_refresh,
             is_loading: true,
         };
@@ -251,18 +272,24 @@ impl TuiSlashCommandModel {
         };
 
         let mixer = self.mixer.as_ref(ctx);
-        *rows = mixer.results().iter().filter_map(row_from_result).collect();
         *is_loading = mixer.is_loading();
+        if *is_loading {
+            return;
+        }
+
+        let previously_selected_action = rows.get(*selected_index).map(|row| row.action.clone());
+        *rows = mixer.results().iter().filter_map(row_from_result).collect();
         if rows.is_empty() {
             *selected_index = 0;
             *scroll_offset = 0;
+        } else if *select_last_result_on_refresh {
+            *selected_index = rows.len() - 1;
+            *select_last_result_on_refresh = false;
+            keep_selected_visible(rows.len(), *selected_index, scroll_offset);
         } else {
-            if *select_last_result_on_refresh {
-                *selected_index = rows.len() - 1;
-                *select_last_result_on_refresh = false;
-            } else {
-                *selected_index = (*selected_index).min(rows.len() - 1);
-            }
+            *selected_index = previously_selected_action
+                .and_then(|action| rows.iter().position(|row| row.action == action))
+                .unwrap_or(rows.len() - 1);
             keep_selected_visible(rows.len(), *selected_index, scroll_offset);
         }
         ctx.emit(TuiSlashCommandModelEvent);

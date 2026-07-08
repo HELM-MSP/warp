@@ -17,7 +17,7 @@ use warpui::fonts::FamilyId;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 pub use zero_state::*;
 
-use super::AcceptSlashCommandOrSavedPrompt;
+use super::{slash_command_is_supported_in_tui, AcceptSlashCommandOrSavedPrompt};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
@@ -389,6 +389,13 @@ impl SlashCommandDataSource {
         command: &StaticCommand,
         context: &ActiveCommandsContext,
     ) -> bool {
+        if self.is_tui_agent_context && !slash_command_is_supported_in_tui(command) {
+            // GUI-only immediate actions (for example `/init`, which dispatches
+            // `TerminalAction::InitProject`, and `/conversations`, which opens GUI
+            // conversation UI) are not prompt text and do not have equivalent TUI
+            // flows yet. Keep them out of the TUI slash menu until they do.
+            return false;
+        }
         if !command.is_active(context.session_context) {
             return false;
         }
