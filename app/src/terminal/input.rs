@@ -3453,7 +3453,7 @@ impl Input {
         let slash_command_data_source = ctx.add_model(|ctx| {
             let args = slash_commands::DataSourceArgs {
                 active_session: active_session.clone(),
-                agent_view_controller: agent_view_controller.clone(),
+                agent_view_controller: Some(agent_view_controller.clone()),
                 cli_subagent_controller: cli_subagent_controller.clone(),
                 terminal_view_id,
                 // Wired post-construction via `attach_ambient_agent_view_model`.
@@ -3466,7 +3466,7 @@ impl Input {
             if FeatureFlag::CloudModeInputV2.is_enabled() {
                 let args = slash_commands::DataSourceArgs {
                     active_session: active_session.clone(),
-                    agent_view_controller: agent_view_controller.clone(),
+                    agent_view_controller: Some(agent_view_controller.clone()),
                     cli_subagent_controller: cli_subagent_controller.clone(),
                     terminal_view_id,
                     // Wired post-construction via `attach_ambient_agent_view_model`.

@@ -21,6 +21,7 @@ mod conversation_selection;
 mod exit_confirmation;
 mod input_mode_policy;
 mod keybindings;
+mod slash_commands;
 mod terminal_block;
 mod terminal_session_view;
 #[cfg(test)]

@@ -44,10 +44,26 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 pub struct DataSourceArgs {
     pub active_session: ModelHandle<ActiveSession>,
-    pub agent_view_controller: ModelHandle<AgentViewController>,
+    pub agent_view_controller: Option<ModelHandle<AgentViewController>>,
     pub cli_subagent_controller: ModelHandle<CLISubagentController>,
     pub terminal_view_id: EntityId,
     pub ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
+}
+
+impl DataSourceArgs {
+    pub fn for_tui(
+        active_session: ModelHandle<ActiveSession>,
+        cli_subagent_controller: ModelHandle<CLISubagentController>,
+        terminal_view_id: EntityId,
+    ) -> Self {
+        Self {
+            active_session,
+            agent_view_controller: None,
+            cli_subagent_controller,
+            terminal_view_id,
+            ambient_agent_view_model: None,
+        }
+    }
 }
 
 /// Context needed to decide which slash commands are enabled.
@@ -63,7 +79,7 @@ struct ActiveCommandsContext {
 
 pub struct SlashCommandDataSource {
     active_session: ModelHandle<ActiveSession>,
-    agent_view_controller: ModelHandle<AgentViewController>,
+    agent_view_controller: Option<ModelHandle<AgentViewController>>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     terminal_view_id: EntityId,
     active_commands_by_id: HashMap<SlashCommandId, StaticCommand>,
@@ -134,13 +150,15 @@ impl SlashCommandDataSource {
                 me.recompute_active_commands(ctx);
             }
         });
-        ctx.subscribe_to_model(&agent_view_controller, |me, _, event, ctx| match event {
-            AgentViewControllerEvent::EnteredAgentView { .. }
-            | AgentViewControllerEvent::ExitedAgentView { .. } => {
-                me.recompute_active_commands(ctx);
-            }
-            _ => (),
-        });
+        if let Some(agent_view_controller) = &agent_view_controller {
+            ctx.subscribe_to_model(agent_view_controller, |me, _, event, ctx| match event {
+                AgentViewControllerEvent::EnteredAgentView { .. }
+                | AgentViewControllerEvent::ExitedAgentView { .. } => {
+                    me.recompute_active_commands(ctx);
+                }
+                _ => (),
+            });
+        }
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
                 event,
@@ -280,8 +298,11 @@ impl SlashCommandDataSource {
 
         let mut session_context = Availability::empty();
 
-        let is_agent_view_active =
-            self.is_tui_agent_context || self.agent_view_controller.as_ref(ctx).is_active();
+        let is_agent_view_active = self.is_tui_agent_context
+            || self
+                .agent_view_controller
+                .as_ref()
+                .is_some_and(|controller| controller.as_ref(ctx).is_active());
         if !FeatureFlag::AgentView.is_enabled() {
             // When the AgentView feature flag is disabled, set both view bits so that
             // either view requirement is satisfied (but other requirements like
@@ -429,7 +450,9 @@ impl SlashCommandDataSource {
     }
 
     pub fn is_agent_view_active(&self, ctx: &AppContext) -> bool {
-        self.agent_view_controller.as_ref(ctx).is_active()
+        self.agent_view_controller
+            .as_ref()
+            .is_some_and(|controller| controller.as_ref(ctx).is_active())
     }
 
     pub fn active_session_for_v2_zero_state(&self) -> &ModelHandle<ActiveSession> {
@@ -464,12 +487,18 @@ impl SlashCommandDataSource {
     /// command. Conversations without a `task_id` are local and never qualify.
     #[cfg(not(target_family = "wasm"))]
     fn active_conversation_is_cloud_oz(&self, ctx: &AppContext) -> bool {
-        let conversation_id = match self
-            .agent_view_controller
-            .as_ref(ctx)
-            .agent_view_state()
-            .active_conversation_id()
-        {
+        if self.is_tui_agent_context {
+            return false;
+        }
+
+        let agent_view_conversation_id =
+            self.agent_view_controller.as_ref().and_then(|controller| {
+                controller
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .active_conversation_id()
+            });
+        let conversation_id = match agent_view_conversation_id {
             Some(id) => id,
             None => match BlocklistAIHistoryModel::as_ref(ctx)
                 .active_conversation(self.terminal_view_id)

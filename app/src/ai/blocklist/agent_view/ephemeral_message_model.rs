@@ -141,6 +141,12 @@ impl EphemeralMessageModel {
     }
 }
 
+impl Default for EphemeralMessageModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Entity for EphemeralMessageModel {
     type Event = EphemeralMessageModelEvent;
 }
