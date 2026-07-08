@@ -12,9 +12,9 @@ use warp::tui_export::{
     AgentViewEntryOrigin, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason,
     CommandExecutionSource, ConversationSelection, ConversationSelectionHandle,
-    ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent,
-    ModelEvent, PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit,
+    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences,
+    LLMPreferencesEvent, ModelEvent, PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity;
@@ -38,6 +38,7 @@ use crate::transcript_view::TuiTranscriptView;
 use crate::transient_hint::TransientHint;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
+use crate::usage::UsageToggle;
 use crate::warping_indicator::render_warping_indicator;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
@@ -98,6 +99,8 @@ pub(crate) struct TuiTerminalSessionView {
     /// Armed by a ctrl-c press; a second press while armed exits the TUI.
     /// The footer shows [`CTRL_C_EXIT_HINT`] while armed.
     exit_confirmation: ExitConfirmation,
+    /// Credits⇄cost display state for the footer's clickable usage entry.
+    usage_toggle: UsageToggle,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
@@ -265,6 +268,25 @@ impl TuiTerminalSessionView {
             ActiveSessionEvent::UpdatedPwd => ctx.notify(),
             ActiveSessionEvent::Bootstrapped => {}
         });
+        // The footer's usage entry shows the selected conversation's token/cost
+        // totals: re-render when that conversation's usage metadata updates.
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |view, _, event, ctx| {
+                if let BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                    conversation_id,
+                } = event
+                {
+                    let selected = view
+                        .conversation_selection
+                        .as_ref(ctx)
+                        .selected_conversation_id(ctx);
+                    if selected == Some(*conversation_id) {
+                        ctx.notify();
+                    }
+                }
+            },
+        );
 
         ctx.spawn_stream_local(wakeups_rx, |_, _, ctx| ctx.notify(), |_, _| {});
         // Focus the input view so the keymap responder chain is
@@ -280,6 +302,7 @@ impl TuiTerminalSessionView {
             active_session,
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
+            usage_toggle: UsageToggle::default(),
             ai_input_model,
             terminal_model: model,
             transient_hint: TransientHint::default(),
@@ -424,7 +447,28 @@ impl TuiTerminalSessionView {
                     .finish(),
             );
         }
+        // Usage entry: the selected conversation's token/cost totals, hidden
+        // until any usage has been reported.
+        if let Some(totals) = self.selected_conversation_usage_totals(ctx) {
+            footer = footer
+                .child(TuiText::new(" • ").with_style(dim).truncate().finish())
+                .child(self.usage_toggle.render_entry(totals));
+        }
         footer
+    }
+
+    /// The selected conversation's accumulated usage totals, or `None` (entry
+    /// hidden) until any usage has been reported.
+    fn selected_conversation_usage_totals(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ConversationUsageTotals> {
+        let totals = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation(ctx)?
+            .usage_totals();
+        (totals != ConversationUsageTotals::default()).then_some(totals)
     }
 
     /// Whether the input is in `!` shell mode (locked shell input).
