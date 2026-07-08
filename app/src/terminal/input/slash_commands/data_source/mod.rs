@@ -70,15 +70,20 @@ pub struct SlashCommandDataSource {
     active_repo_root: Option<PathBuf>,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
     is_cloud_mode_v2: bool,
+    is_tui_agent_context: bool,
 }
 
 impl SlashCommandDataSource {
     pub fn new(args: DataSourceArgs, ctx: &mut ModelContext<Self>) -> Self {
-        Self::build(args, /* is_cloud_mode_v2 */ false, ctx)
+        Self::build(
+            args, /* is_cloud_mode_v2 */ false, /* is_tui_agent_context */ false, ctx,
+        )
     }
 
     pub fn for_cloud_mode_v2(args: DataSourceArgs, ctx: &mut ModelContext<Self>) -> Self {
-        Self::build(args, /* is_cloud_mode_v2 */ true, ctx)
+        Self::build(
+            args, /* is_cloud_mode_v2 */ true, /* is_tui_agent_context */ false, ctx,
+        )
     }
 
     /// Attaches an ambient agent view model after construction. Used on the shared-session viewer
@@ -97,7 +102,18 @@ impl SlashCommandDataSource {
         self.recompute_active_commands(ctx);
     }
 
-    fn build(args: DataSourceArgs, is_cloud_mode_v2: bool, ctx: &mut ModelContext<Self>) -> Self {
+    pub fn for_tui(args: DataSourceArgs, ctx: &mut ModelContext<Self>) -> Self {
+        Self::build(
+            args, /* is_cloud_mode_v2 */ false, /* is_tui_agent_context */ true, ctx,
+        )
+    }
+
+    fn build(
+        args: DataSourceArgs,
+        is_cloud_mode_v2: bool,
+        is_tui_agent_context: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         let DataSourceArgs {
             active_session,
             agent_view_controller,
@@ -211,6 +227,7 @@ impl SlashCommandDataSource {
             active_repo_root: None,
             ambient_agent_view_model: None,
             is_cloud_mode_v2,
+            is_tui_agent_context,
         };
         // Route ambient wiring through the setter so construction and the lazy shared-session
         // viewer path share one implementation.
@@ -263,7 +280,8 @@ impl SlashCommandDataSource {
 
         let mut session_context = Availability::empty();
 
-        let is_agent_view_active = self.agent_view_controller.as_ref(ctx).is_active();
+        let is_agent_view_active =
+            self.is_tui_agent_context || self.agent_view_controller.as_ref(ctx).is_active();
         if !FeatureFlag::AgentView.is_enabled() {
             // When the AgentView feature flag is disabled, set both view bits so that
             // either view requirement is satisfied (but other requirements like
