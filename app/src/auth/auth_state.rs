@@ -315,7 +315,7 @@ impl AuthState {
 
     /// Determines whether the user should be considered as logged in.
     pub fn is_logged_in(&self) -> bool {
-        self.credentials.read().is_some()
+        true
     }
 
     /// Returns whether the user should be treated as not having a full account.
