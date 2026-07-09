@@ -1,7 +1,8 @@
-use crate::auth::credentials::{FirebaseToken, RefreshToken};
-#[cfg(feature = "skip_login")]
+use crate::auth::credentials::{AuthToken, FirebaseToken, RefreshToken};
+use crate::server::server_api::openrouter::HELM_OPENROUTER_API_KEY_ENV;
 use crate::server::server_api::ServerApi;
 use anyhow::Result;
+use serial_test::serial;
 
 #[test]
 fn test_firebase_token_urls() -> Result<()> {
@@ -50,4 +51,30 @@ fn access_token_skip_login_rejects_bearer_token() {
         error.to_string(),
         "skip_login enabled; failing all authenticated requests"
     );
+}
+
+#[test]
+#[serial]
+fn access_token_openrouter_byok_returns_no_auth() {
+    let (event_sender, _) = async_channel::unbounded();
+    let server_api = ServerApi::new_for_test_with_bearer_token(None, event_sender);
+
+    std::env::set_var(HELM_OPENROUTER_API_KEY_ENV, "sk-or-test-key");
+    let token = futures::executor::block_on(server_api.access_token());
+    std::env::remove_var(HELM_OPENROUTER_API_KEY_ENV);
+
+    assert!(matches!(token, Ok(AuthToken::NoAuth)), "{token:?}");
+}
+
+#[test]
+#[serial]
+fn access_token_openrouter_empty_key_falls_back_to_missing_credentials() {
+    let (event_sender, _) = async_channel::unbounded();
+    let server_api = ServerApi::new_for_test_with_bearer_token(None, event_sender);
+
+    std::env::set_var(HELM_OPENROUTER_API_KEY_ENV, "   ");
+    let error = futures::executor::block_on(server_api.access_token()).unwrap_err();
+    std::env::remove_var(HELM_OPENROUTER_API_KEY_ENV);
+
+    assert_eq!(error.to_string(), "missing authentication credentials");
 }
