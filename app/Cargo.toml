@@ -395,6 +395,7 @@ async-executor = "1.5.1"
 command = { workspace = true, features = ["test-util"] }
 ctor = "0.1.18"
 http_client = { workspace = true, features = ["test-util"] }
+helm_multi_agent_mock.workspace = true
 mockall = "0.13.1"
 mockito.workspace = true
 serial_test = "0.8.0"

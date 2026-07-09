@@ -5999,6 +5999,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "helm_multi_agent_mock"
+version = "0.1.0"
+dependencies = [
+ "aha-reqwest-eventsource",
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "futures",
+ "http 1.4.0",
+ "http_client",
+ "prost 0.14.3",
+ "prost-types",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "warp_multi_agent_api",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14369,6 +14390,7 @@ dependencies = [
  "git2",
  "gloo",
  "handlebars",
+ "helm_multi_agent_mock",
  "hex",
  "http 1.4.0",
  "http_client",
