@@ -237,6 +237,14 @@ impl ServerApi {
         }
 
         let Some(credentials) = self.auth_state.credentials() else {
+            // Helm OpenRouter BYOK path: allow unauthenticated agent requests to proceed
+            // without an Authorization header when the user has supplied their own key.
+            if std::env::var(super::openrouter::HELM_OPENROUTER_API_KEY_ENV)
+                .is_ok_and(|key| !key.trim().is_empty())
+            {
+                return Ok(AuthToken::NoAuth);
+            }
+
             bail!("missing authentication credentials");
         };
 

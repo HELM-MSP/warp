@@ -5,6 +5,7 @@ pub mod harness_support;
 pub mod integrations;
 pub mod managed_secrets;
 pub mod object;
+pub(crate) mod openrouter;
 pub(crate) mod presigned_upload;
 pub mod referral;
 pub mod team;
@@ -1227,6 +1228,12 @@ impl ServerApi {
         request: &warp_multi_agent_api::Request,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
+        // Helm OpenRouter BYOK path: route to OpenRouter when the user has supplied
+        // their own key, bypassing Warp's hosted multi-agent endpoint.
+        if openrouter::is_openrouter_adapter_enabled() {
+            return openrouter::generate_helm_openrouter_output(&self.client, request).await;
+        }
+
         let auth_token = self
             .get_or_refresh_access_token()
             .await
