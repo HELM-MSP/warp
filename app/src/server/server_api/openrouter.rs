@@ -240,6 +240,10 @@ pub async fn generate_helm_openrouter_output(
         .ok()
         .filter(|tag| !tag.trim().is_empty());
 
+    log::info!(
+        "helm: OpenRouter adapter handling multi-agent request (model={model})"
+    );
+
     let openrouter_request = build_openrouter_request(request, model);
     let conversation_id = conversation_id_from_request(request);
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -259,6 +263,8 @@ pub async fn generate_helm_openrouter_output(
         .send()
         .await
         .map_err(|e| Arc::new(AIApiError::Transport(e)))?;
+
+    log::info!("helm: OpenRouter responded with status {}", response.status());
 
     if let Err(err) = response.error_for_status_ref() {
         let status = err.source.status().unwrap_or(http::StatusCode::BAD_REQUEST);
@@ -283,34 +289,42 @@ pub async fn generate_helm_openrouter_output(
         };
         yield Ok(init);
 
-        let create_message = warp_multi_agent_api::ResponseEvent {
+        // Helm BYOK: the adapter fabricates its own task_id (the client never saw a
+        // server `CreateTask`), so we must emit one ourselves before any
+        // `AddMessagesToTask` / `AppendToMessageContent`. Without this, every
+        // downstream action is rejected with TaskNotFound / ExchangeNotFound and
+        // nothing renders. Mirrors the canonical sequence in
+        // replay_agent_conversations: CreateTask with empty messages, then
+        // AddMessagesToTask adds the (empty) anchor message, then content is
+        // streamed via AppendToMessageContent.
+        let create_task = warp_multi_agent_api::ResponseEvent {
             r#type: Some(warp_multi_agent_api::response_event::Type::ClientActions(
                 warp_multi_agent_api::response_event::ClientActions {
                     actions: vec![warp_multi_agent_api::ClientAction {
-                        action: Some(warp_multi_agent_api::client_action::Action::AddMessagesToTask(
-                            warp_multi_agent_api::client_action::AddMessagesToTask {
-                                task_id: task_id.clone(),
-                                messages: vec![warp_multi_agent_api::Message {
-                                    id: assistant_message_id.clone(),
-                                    task_id: task_id.clone(),
-                                    request_id: request_id.clone(),
-                                    timestamp: Some(prost_types::Timestamp::from(
-                                        std::time::SystemTime::now(),
-                                    )),
-                                    server_message_data: String::new(),
-                                    citations: Vec::new(),
-                                    message: Some(warp_multi_agent_api::message::Message::AgentOutput(
-                                        warp_multi_agent_api::message::AgentOutput { text: String::new() },
-                                    )),
-                                }],
+                        action: Some(warp_multi_agent_api::client_action::Action::CreateTask(
+                            warp_multi_agent_api::client_action::CreateTask {
+                                task: Some(warp_multi_agent_api::Task {
+                                    id: task_id.clone(),
+                                    description: String::new(),
+                                    dependencies: None,
+                                    messages: Vec::new(),
+                                    summary: String::new(),
+                                    server_data: String::new(),
+                                }),
                             },
                         )),
                     }],
                 },
             )),
         };
-        yield Ok(create_message);
+        yield Ok(create_task);
 
+        // Buffer the entire OpenRouter stream into one string, then emit a SINGLE
+        // `AddMessagesToTask` carrying the full text. We deliberately do NOT use
+        // `AppendToMessageContent` here: in account-free BYOK mode the append
+        // streaming path does not render or persist, even though it returns Ok.
+        // Putting the complete text in `AddMessagesToTask` is the protocol used
+        // by `helm_multi_agent_mock` and is the path proven to render.
         let mut current_content = String::new();
 
         for await chunk_result in stream {
@@ -357,12 +371,6 @@ pub async fn generate_helm_openrouter_output(
                     if let Some(content) = delta.content {
                         if !content.is_empty() {
                             current_content.push_str(&content);
-                            yield Ok(build_append_event(
-                                &assistant_message_id,
-                                &task_id,
-                                &request_id,
-                                &current_content,
-                            ));
                         }
                     }
 
@@ -383,6 +391,42 @@ pub async fn generate_helm_openrouter_output(
                 }
             }
         }
+
+        // Emit ONE AddMessagesToTask with the complete buffered text, matching
+        // the protocol used by `helm_multi_agent_mock`.
+        let create_message = warp_multi_agent_api::ResponseEvent {
+            r#type: Some(warp_multi_agent_api::response_event::Type::ClientActions(
+                warp_multi_agent_api::response_event::ClientActions {
+                    actions: vec![warp_multi_agent_api::ClientAction {
+                        action: Some(warp_multi_agent_api::client_action::Action::AddMessagesToTask(
+                            warp_multi_agent_api::client_action::AddMessagesToTask {
+                                task_id: task_id.clone(),
+                                messages: vec![warp_multi_agent_api::Message {
+                                    id: assistant_message_id.clone(),
+                                    task_id: task_id.clone(),
+                                    request_id: request_id.clone(),
+                                    timestamp: Some(prost_types::Timestamp::from(
+                                        std::time::SystemTime::now(),
+                                    )),
+                                    server_message_data: String::new(),
+                                    citations: Vec::new(),
+                                    message: Some(warp_multi_agent_api::message::Message::AgentOutput(
+                                        warp_multi_agent_api::message::AgentOutput {
+                                            text: current_content.clone(),
+                                        },
+                                    )),
+                                }],
+                            },
+                        )),
+                    }],
+                },
+            )),
+        };
+        log::info!(
+            "helm: OpenRouter adapter emitted response with {} bytes of content",
+            current_content.len()
+        );
+        yield Ok(create_message);
 
         let finished = warp_multi_agent_api::ResponseEvent {
             r#type: Some(warp_multi_agent_api::response_event::Type::Finished(
@@ -563,49 +607,6 @@ fn primary_task_id(request: &warp_multi_agent_api::Request) -> String {
         .as_ref()
         .and_then(|task_context| task_context.tasks.first().map(|task| task.id.clone()))
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
-}
-
-fn build_append_event(
-    message_id: &str,
-    task_id: &str,
-    request_id: &str,
-    content: &str,
-) -> warp_multi_agent_api::ResponseEvent {
-    warp_multi_agent_api::ResponseEvent {
-        r#type: Some(warp_multi_agent_api::response_event::Type::ClientActions(
-            warp_multi_agent_api::response_event::ClientActions {
-                actions: vec![warp_multi_agent_api::ClientAction {
-                    action: Some(
-                        warp_multi_agent_api::client_action::Action::AppendToMessageContent(
-                            warp_multi_agent_api::client_action::AppendToMessageContent {
-                                task_id: task_id.to_string(),
-                                message: Some(warp_multi_agent_api::Message {
-                                    id: message_id.to_string(),
-                                    task_id: task_id.to_string(),
-                                    request_id: request_id.to_string(),
-                                    timestamp: Some(prost_types::Timestamp::from(
-                                        std::time::SystemTime::now(),
-                                    )),
-                                    server_message_data: String::new(),
-                                    citations: Vec::new(),
-                                    message: Some(
-                                        warp_multi_agent_api::message::Message::AgentOutput(
-                                            warp_multi_agent_api::message::AgentOutput {
-                                                text: content.to_string(),
-                                            },
-                                        ),
-                                    ),
-                                }),
-                                mask: Some(prost_types::FieldMask {
-                                    paths: vec!["text".to_string()],
-                                }),
-                            },
-                        ),
-                    ),
-                }],
-            },
-        )),
-    }
 }
 
 fn build_add_tool_call_event(

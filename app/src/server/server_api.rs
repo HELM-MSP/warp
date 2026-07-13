@@ -1231,6 +1231,7 @@ impl ServerApi {
         // Helm OpenRouter BYOK path: route to OpenRouter when the user has supplied
         // their own key, bypassing Warp's hosted multi-agent endpoint.
         if openrouter::is_openrouter_adapter_enabled() {
+            log::info!("helm: routing multi-agent request to OpenRouter (BYOK adapter enabled)");
             return openrouter::generate_helm_openrouter_output(&self.client, request).await;
         }
 
