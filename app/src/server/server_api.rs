@@ -1223,11 +1223,73 @@ impl ServerApi {
         }
     }
 
+/// Route a multi-agent request to a helm_oz server (Gap 3).
+///
+/// When `HELM_OZ_URL` is set, the Warp client sends its protobuf Request to
+/// helm_oz's `/ai/multi-agent` endpoint instead of Warp's hosted Oz or the
+/// inline OpenRouter adapter. helm_oz becomes the brain: it plans, executes
+/// on endpoints via Portal MCP, and synthesizes — Warp just displays.
+///
+/// The wire format is identical to Warp's hosted endpoint: protobuf request
+/// body, SSE response of base64-url-safe-encoded protobuf ResponseEvents.
+async fn route_to_helm_oz(
+    client: &http_client::Client,
+    request: &warp_multi_agent_api::Request,
+    oz_url: &str,
+) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>> {
+    let url = format!("{}/ai/multi-agent", oz_url.trim_end_matches('/'));
+    let request_builder = client
+        .post(url)
+        .proto(request)
+        .prevent_sleep("helm_oz multi-agent request");
+
+    let output_stream = request_builder.eventsource().filter_map(|event| async {
+        let result = match event {
+            Ok(reqwest_eventsource::Event::Message(message_event)) => {
+                match BASE64_URL_SAFE.decode(message_event.data.trim_matches('"')) {
+                    Ok(decoded_data) => {
+                        let action = warp_multi_agent_api::ResponseEvent::decode(
+                            decoded_data.as_slice(),
+                        );
+                        Some(action.map_err(|e| AIApiError::Other(anyhow::Error::from(e))))
+                    }
+                    Err(e) => Some(Err(AIApiError::Other(anyhow::Error::from(e)))),
+                }
+            }
+            Ok(reqwest_eventsource::Event::Open) => None,
+            Err(err) => Some(Err(
+                AIApiError::from_stream_error("RouteToHelmOz", err).await
+            )),
+        }
+        .map(|item| item.map_err(Arc::new));
+        result
+    });
+
+    cfg_if::cfg_if! {
+        if #[cfg(target_family = "wasm")] {
+            Ok(output_stream.boxed_local())
+        } else {
+            Ok(output_stream.boxed())
+        }
+    }
+}
+
     pub async fn generate_multi_agent_output(
         &self,
         request: &warp_multi_agent_api::Request,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
+        // Gap 3: route to helm_oz when configured. helm_oz is the brain that
+        // uses OpenRouter for reasoning + Portal MCP for endpoint execution.
+        // When set, the inline OpenRouter adapter and Warp's hosted endpoint
+        // are both bypassed.
+        if let Ok(oz_url) = std::env::var("HELM_OZ_URL") {
+            if !oz_url.trim().is_empty() {
+                log::info!("helm: routing multi-agent request to helm_oz at {oz_url}");
+                return Self::route_to_helm_oz(&self.client, request, &oz_url).await;
+            }
+        }
+
         // Helm OpenRouter BYOK path: route to OpenRouter when the user has supplied
         // their own key, bypassing Warp's hosted multi-agent endpoint.
         if openrouter::is_openrouter_adapter_enabled() {
