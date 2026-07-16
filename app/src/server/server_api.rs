@@ -5,6 +5,7 @@ pub mod harness_support;
 pub mod integrations;
 pub mod managed_secrets;
 pub mod object;
+pub(crate) mod helm_launch;
 pub(crate) mod openrouter;
 pub(crate) mod presigned_upload;
 pub mod referral;
@@ -1223,35 +1224,29 @@ impl ServerApi {
         }
     }
 
-/// Route a multi-agent request to a helm_oz server (Gap 3).
+/// Gap 3/4: route a multi-agent request to a helm_oz server.
 ///
-/// When `HELM_OZ_URL` is set, the Warp client sends its protobuf Request to
-/// helm_oz's `/ai/multi-agent` endpoint instead of Warp's hosted Oz or the
-/// inline OpenRouter adapter. helm_oz becomes the brain: it plans, executes
-/// on endpoints via Portal MCP, and synthesizes — Warp just displays.
+/// helm_oz is the brain: it plans, executes on endpoints via Portal MCP, and
+/// synthesizes — Warp just displays. The wire format is identical to Warp's
+/// hosted endpoint: protobuf request body, SSE response of base64-url-safe-
+/// encoded protobuf ResponseEvents.
 ///
-/// The wire format is identical to Warp's hosted endpoint: protobuf request
-/// body, SSE response of base64-url-safe-encoded protobuf ResponseEvents.
-///
-/// Gap 2: when `HELM_OZ_BEARER` is set, the agent JWT is forwarded as
-/// `Authorization: Bearer` so helm_oz validates it and binds execution to
-/// the token's `endpoint_id`. The bearer normally arrives from the Portal
-/// launch flow (Gap 4); `HELM_OZ_BEARER` bridges live testing until then.
+/// `bearer` is the agent JWT (Gap 2: helm_oz validates it and binds execution
+/// to the token's `endpoint_id`). It normally comes from the launch config
+/// (Gap 4: `~/.config/helm/launch.json`); `HELM_OZ_BEARER` remains a dev bridge.
 async fn route_to_helm_oz(
     client: &http_client::Client,
     request: &warp_multi_agent_api::Request,
     oz_url: &str,
+    bearer: Option<&str>,
 ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>> {
     let url = format!("{}/ai/multi-agent", oz_url.trim_end_matches('/'));
     let request_builder = client
         .post(url)
         .proto(request)
         .prevent_sleep("helm_oz multi-agent request");
-    let request_builder = match std::env::var("HELM_OZ_BEARER")
-        .ok()
-        .filter(|b| !b.trim().is_empty())
-    {
-        Some(bearer) => request_builder.bearer_auth(bearer.trim()),
+    let request_builder = match bearer {
+        Some(token) => request_builder.bearer_auth(token),
         None => request_builder,
     };
 
@@ -1291,15 +1286,23 @@ async fn route_to_helm_oz(
         request: &warp_multi_agent_api::Request,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
-        // Gap 3: route to helm_oz when configured. helm_oz is the brain that
+        // Gap 3/4: route to helm_oz when configured. helm_oz is the brain that
         // uses OpenRouter for reasoning + Portal MCP for endpoint execution.
-        // When set, the inline OpenRouter adapter and Warp's hosted endpoint
-        // are both bypassed.
-        if let Ok(oz_url) = std::env::var("HELM_OZ_URL") {
-            if !oz_url.trim().is_empty() {
-                log::info!("helm: routing multi-agent request to helm_oz at {oz_url}");
-                return Self::route_to_helm_oz(&self.client, request, &oz_url).await;
-            }
+        // Precedence: launch.json (~/.config/helm/launch.json) → HELM_OZ_URL
+        // env (dev bridge). When set, the inline OpenRouter adapter and Warp's
+        // hosted endpoint are both bypassed.
+        if let Some(target) = helm_launch::launch_target() {
+            log::info!(
+                "helm: routing multi-agent request to helm_oz at {}",
+                target.helm_oz_url
+            );
+            return Self::route_to_helm_oz(
+                &self.client,
+                request,
+                &target.helm_oz_url,
+                target.agent_token.as_deref(),
+            )
+            .await;
         }
 
         // Helm OpenRouter BYOK path: route to OpenRouter when the user has supplied
