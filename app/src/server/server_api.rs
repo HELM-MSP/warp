@@ -1232,6 +1232,11 @@ impl ServerApi {
 ///
 /// The wire format is identical to Warp's hosted endpoint: protobuf request
 /// body, SSE response of base64-url-safe-encoded protobuf ResponseEvents.
+///
+/// Gap 2: when `HELM_OZ_BEARER` is set, the agent JWT is forwarded as
+/// `Authorization: Bearer` so helm_oz validates it and binds execution to
+/// the token's `endpoint_id`. The bearer normally arrives from the Portal
+/// launch flow (Gap 4); `HELM_OZ_BEARER` bridges live testing until then.
 async fn route_to_helm_oz(
     client: &http_client::Client,
     request: &warp_multi_agent_api::Request,
@@ -1242,6 +1247,13 @@ async fn route_to_helm_oz(
         .post(url)
         .proto(request)
         .prevent_sleep("helm_oz multi-agent request");
+    let request_builder = match std::env::var("HELM_OZ_BEARER")
+        .ok()
+        .filter(|b| !b.trim().is_empty())
+    {
+        Some(bearer) => request_builder.bearer_auth(bearer.trim()),
+        None => request_builder,
+    };
 
     let output_stream = request_builder.eventsource().filter_map(|event| async {
         let result = match event {
