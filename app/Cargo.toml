@@ -610,6 +610,7 @@ default = [
     "markdown_tables",
     "markdown_mermaid",
     "blocklist_markdown_images",
+    "blocklist_markdown_table_rendering",
     "pr_comments_slash_command",
     "pr_comments_v2",
     "pr_comments_skill",
