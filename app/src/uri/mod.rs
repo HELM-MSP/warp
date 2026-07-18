@@ -1,4 +1,5 @@
 mod docker;
+pub mod helm_warp;
 pub mod parse_url_paths;
 pub mod web_intent_parser;
 
@@ -1087,6 +1088,15 @@ pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
     // additional logic to handle the hotkey window and there being no
     // currently-active window.
     let primary_window_id = get_primary_window(ctx.windows().frontmost_window_id(), ctx);
+
+    // Helm-Warp launch scheme (`helm-warp://connect?...`): exchange the code
+    // for launch credentials and write launch.json. Handled before the custom
+    // URI validation below because it is a distinct scheme with its own
+    // (async, side-effecting) semantics — not a window/launch-config action.
+    if helm_warp::is_helm_warp_url(url) {
+        helm_warp::handle(url, ctx);
+        return;
+    }
 
     // If we're running on a platform where we can spawn local TTYs,
     // check if this is a file:// URL and if so, spawn a new session
