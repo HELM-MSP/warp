@@ -2530,6 +2530,7 @@ fn render_legacy_table_section(
 
 fn render_table_cell(props: TableCellProps, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
     let mut cell_element = FormattedTextElement::new(
         FormattedText::new([markdown_parser::FormattedTextLine::Line(props.cell)]),
         props.font_size,
@@ -2550,6 +2551,14 @@ fn render_table_cell(props: TableCellProps, app: &AppContext) -> Box<dyn Element
         Some(props.inline_code_text_color),
         Some(props.inline_code_bg_color),
     )
+    // Helm-Warp: resolve `[:success]`/`[:error]`/... color spans inside table
+    // cells (same palette as the rich-text body path).
+    .with_semantic_color_palette(Arc::new(SemanticColorPalette {
+        success: theme.terminal_colors().normal.green.into(),
+        warning: theme.terminal_colors().normal.yellow.into(),
+        error: theme.terminal_colors().normal.red.into(),
+        info: theme.terminal_colors().normal.blue.into(),
+    }))
     .set_selectable(props.selectable)
     .register_default_click_handlers(|hyperlink, _, app| {
         app.open_url(&hyperlink.url);
