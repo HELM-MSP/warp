@@ -547,6 +547,42 @@ pub struct FormattedTextStyles {
     pub strikethrough: bool,
     pub inline_code: bool,
     pub hyperlink: Option<Hyperlink>,
+    /// Helm-Warp semantic color span (`[:success]text[:]`). Resolved to a
+    /// foreground color at render time via `SemanticColorPalette`.
+    pub color: Option<SemanticColor>,
+}
+
+/// A semantic color for inline text, set by Helm-Warp color spans
+/// (`[:success]text[:]`, `[:warning]...`, `[:error]...`, `[:info]...`).
+///
+/// This is intentionally a small, named palette rather than arbitrary RGB: it
+/// maps onto theme tokens (terminal green/yellow/red/blue) so output stays
+/// consistent across light/dark themes and matches the emoji the model already
+/// emits. The concrete `ColorU` is resolved at render time (see
+/// `SemanticColorPalette`), keeping the parser free of theme/color types.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SemanticColor {
+    #[default]
+    Default,
+    Success,
+    Warning,
+    Error,
+    Info,
+}
+
+impl SemanticColor {
+    /// Parse a color name from a `[:name]` span. Returns `None` for unknown
+    /// names so the span falls back to literal text.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "success" | "ok" | "good" | "green" => Some(Self::Success),
+            "warning" | "warn" | "yellow" => Some(Self::Warning),
+            "error" | "fail" | "bad" | "danger" | "red" => Some(Self::Error),
+            "info" | "blue" => Some(Self::Info),
+            "default" | "normal" => Some(Self::Default),
+            _ => None,
+        }
+    }
 }
 
 impl FormattedTextFragment {
@@ -702,6 +738,14 @@ impl fmt::Debug for FormattedTextStyles {
             }
 
             write!(f, "Hyperlink({link:?})")?;
+            first = false;
+        }
+
+        if let Some(color) = self.color {
+            if !first {
+                f.write_str(" | ")?;
+            }
+            write!(f, "Color({color:?})")?;
             first = false;
         }
 

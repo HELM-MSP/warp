@@ -25,7 +25,7 @@ use crate::{
     SizeConstraint,
 };
 use itertools::Itertools;
-use markdown_parser::{Action, FormattedText, FormattedTextFragment, FormattedTextLine, Hyperlink};
+use markdown_parser::{Action, FormattedText, FormattedTextFragment, FormattedTextLine, Hyperlink, SemanticColor};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use std::borrow::Cow;
@@ -145,6 +145,36 @@ struct SavedGlyphPositionIds {
     position_id: String,
 }
 
+/// Helm-Warp: theme-resolved colors for the semantic color palette used by
+/// `[:success]text[:]`-style spans. Callers with theme access (e.g. the agent
+/// conversation render path) construct this from terminal/theme colors and
+/// pass it via [`FormattedTextElement::with_semantic_color_palette`].
+///
+/// Keeping this as plain `ColorU` fields (rather than resolving inside the
+/// parser) preserves the parser/render split and lets the palette adapt to
+/// light/dark themes.
+#[derive(Clone, Debug)]
+pub struct SemanticColorPalette {
+    pub success: ColorU,
+    pub warning: ColorU,
+    pub error: ColorU,
+    pub info: ColorU,
+}
+
+impl SemanticColorPalette {
+    /// Resolve a semantic color to a concrete foreground color. `Default`
+    /// returns `None` so it falls back to the element's base text color.
+    pub fn resolve(&self, color: SemanticColor) -> Option<ColorU> {
+        match color {
+            SemanticColor::Default => None,
+            SemanticColor::Success => Some(self.success),
+            SemanticColor::Warning => Some(self.warning),
+            SemanticColor::Error => Some(self.error),
+            SemanticColor::Info => Some(self.info),
+        }
+    }
+}
+
 pub struct FormattedTextElement {
     formatted_text: Arc<FormattedText>,
     family_id: FamilyId,
@@ -167,6 +197,9 @@ pub struct FormattedTextElement {
     is_mouse_interaction_disabled: bool,
     disable_text_wrapping: bool,
     clip_config: Option<ClipConfig>,
+    /// Helm-Warp semantic-color resolution. When set, fragments whose
+    /// `styles.color` is `Some` are rendered with the palette's foreground color.
+    semantic_color_palette: Option<Arc<SemanticColorPalette>>,
     #[cfg(debug_assertions)]
     /// Captures the location of the constructor call site. This is used for debugging purposes.
     constructor_location: Option<&'static std::panic::Location<'static>>,
@@ -205,6 +238,7 @@ impl FormattedTextElement {
             is_mouse_interaction_disabled: false,
             disable_text_wrapping: false,
             clip_config: None,
+            semantic_color_palette: None,
             #[cfg(debug_assertions)]
             constructor_location: Some(std::panic::Location::caller()),
         }
@@ -255,6 +289,17 @@ impl FormattedTextElement {
                 hyperlink_font_color: ColorU::from_u32(DEFAULT_HYPERLINK_COLOR),
             },
         )
+    }
+
+    /// Helm-Warp: set the semantic-color palette used to resolve `[:success]`-style
+    /// color spans. When unset (the default), color spans render as plain text
+    /// (graceful degradation in stock contexts that don't supply a palette).
+    pub fn with_semantic_color_palette(
+        mut self,
+        palette: Arc<SemanticColorPalette>,
+    ) -> Self {
+        self.semantic_color_palette = Some(palette);
+        self
     }
 
     /// Creates a new FormattedTextElement from a single `str`. Use this method similar to how you'd use
@@ -1815,6 +1860,18 @@ impl Element for FormattedTextElement {
                             if let Some(bg_color) = self.inline_code_bg_color {
                                 if text_style.background_color.is_none() {
                                     text_style.background_color = Some(bg_color);
+                                }
+                            }
+                        }
+                        // Helm-Warp: resolve a semantic color span (`[:success]...`)
+                        // to a foreground color. We never override an explicit
+                        // foreground (e.g. a hyperlink or inline code) set above.
+                        if let Some(sem_color) = inline.styles.color {
+                            if text_style.foreground_color.is_none() {
+                                if let Some(palette) = &self.semantic_color_palette {
+                                    if let Some(resolved) = palette.resolve(sem_color) {
+                                        text_style.foreground_color = Some(resolved);
+                                    }
                                 }
                             }
                         }

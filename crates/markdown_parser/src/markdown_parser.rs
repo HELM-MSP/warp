@@ -26,7 +26,7 @@ use crate::{
     FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextInline,
     FormattedTextLine, Hyperlink, OrderedFormattedIndentTextInline, TableAlignment,
 };
-use crate::{CustomWeight, FormattedTextStyles};
+use crate::{CustomWeight, FormattedTextStyles, SemanticColor};
 
 const HEADER_TAG_MIN_COUNT: usize = 1;
 const HEADER_TAG_MAX_COUNT: usize = 6;
@@ -1030,6 +1030,20 @@ fn parse_inline<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             InlineToken::UnderlineEnd => {
                 input = parse_underline(&mut state, remaining);
             }
+            InlineToken::ColorStart(color) => {
+                // Push a placeholder node + a ColorStart delimiter carrying the
+                // color. The placeholder node is removed when the span closes
+                // (see `parse_color_span`), mirroring underline/link openers.
+                let node_index = state.nodes.len();
+                state.push_closed_node(FormattedTextFragment::plain_text(""));
+                let mut delimiter =
+                    Delimiter::new(node_index, DelimiterKind::ColorStart, 1, None, None);
+                delimiter.color = Some(color);
+                state.delimiters.push(delimiter);
+            }
+            InlineToken::ColorEnd => {
+                input = parse_color_span(&mut state, remaining);
+            }
         }
     }
 
@@ -1311,6 +1325,57 @@ fn parse_underline<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
     remaining
 }
 
+/// Process a Helm-Warp color span: find the matching `ColorStart` delimiter,
+/// apply its color to every fragment between opener and closer (inner emphasis
+/// is still processed for `**bold**` etc. inside the span), then drop the
+/// opener's placeholder node. Mirrors [`parse_underline`].
+fn parse_color_span<'a>(state: &mut InlineState, remaining: &'a str) -> &'a str {
+    let Some((color_start_index, color_start)) = state
+        .delimiters
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, delimiter)| delimiter.kind == DelimiterKind::ColorStart)
+    else {
+        // No opener: treat `[:]` as literal text.
+        state.push_text(":]");
+        return remaining;
+    };
+
+    if !color_start.active {
+        // Inactive opener (nested span): remove it and treat `[:]` as literal,
+        // mirroring underline's nesting guard.
+        state.delimiters.remove(color_start_index);
+        state.push_text(":]");
+        return remaining;
+    }
+
+    let color = color_start.color;
+    let color_start_node = color_start.node_index;
+
+    // Apply the color to every fragment from the opener onward. We unconditionally
+    // set it (not just Default), since a span explicitly requests a color.
+    if let Some(color) = color {
+        state.backtrack_styles(color_start_node, |styles| styles.color = Some(color));
+    }
+
+    // Process inner emphasis (so `[:error]**bold**[:]` is both red and bold).
+    process_emphasis(state, Some(color_start_index));
+
+    state.delimiters.remove(color_start_index);
+    // Disable any nested ColorStart openers we crossed so leftover `[:]` don't
+    // pair with them (matches underline's nesting guard).
+    for delimiter in &mut state.delimiters[..color_start_index] {
+        if delimiter.kind == DelimiterKind::ColorStart {
+            delimiter.active = false;
+        }
+    }
+
+    state.remove_node(color_start_node);
+    state.last_node_closed = true;
+    remaining
+}
+
 /// Process emphasis delimiters on the state's delimiter stack, bounded by `stack_bottom`.
 ///
 /// This is approximately equivalent to the CommonMark [process emphasis](https://spec.commonmark.org/0.30/#phase-2-inline-structure)
@@ -1536,6 +1601,10 @@ fn parse_inline_token<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
             backslash_escape,
             html_entity,
             code_span,
+            // Color spans (`[:name]` / `[:]`) MUST be tried before link_start (`[`) or the
+            // leading `[` is consumed and the span is never recognized.
+            parse_inline_token_color_start,
+            parse_inline_token_color_end,
             parse_inline_token_link_start,
             parse_inline_token_link_end,
             parse_inline_token_asterisk,
@@ -1649,6 +1718,32 @@ fn parse_inline_token_underline_end<'a, E: ContextError<&'a str> + ParseError<&'
     )(input)
 }
 
+/// Parse a Helm-Warp color-span opener `[:name]`, e.g. `[:success]`, `[:error]`.
+/// Only recognized color names produce a `ColorStart`; an unknown name fails to
+/// parse here so the `[:...]` text is treated as literal.
+fn parse_inline_token_color_start<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    // `[:name]` — name is alphanumeric/ascii until the closing `]`.
+    let (rest, name) = delimited(
+        tag("[:"),
+        take_while1(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+        tag("]"),
+    )(input)?;
+    let color = SemanticColor::from_name(name).ok_or(nom::Err::Error(E::from_error_kind(
+        input,
+        nom::error::ErrorKind::Verify,
+    )))?;
+    Ok((rest, InlineToken::ColorStart(color)))
+}
+
+/// Parse a Helm-Warp color-span closer `[:]`.
+fn parse_inline_token_color_end<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, InlineToken<'a>, E> {
+    context("color_end", map(tag("[:]"), |_| InlineToken::ColorEnd))(input)
+}
+
 /// Helper to parse a run of delimiters.
 fn parse_delimiter_run<'a, E: ContextError<&'a str> + ParseError<&'a str>>(
     kind: DelimiterKind,
@@ -1695,6 +1790,10 @@ enum InlineToken<'a> {
     LinkEnd,
     /// A closing </u>, which triggers underline parsing.
     UnderlineEnd,
+    /// A Helm-Warp `[:name]` color-span opener carrying the parsed color.
+    ColorStart(SemanticColor),
+    /// A Helm-Warp `[:]` color-span closer, which triggers `parse_color_span`.
+    ColorEnd,
 }
 
 /// An entry in the [delimiter stack](https://spec.commonmark.org/0.30/#delimiter-stack)
@@ -1715,6 +1814,9 @@ struct Delimiter {
     can_open: bool,
     /// Whether or not this delimiter can close a strong/emphasis range.
     can_close: bool,
+    /// Helm-Warp color-span parameter: the semantic color carried by a
+    /// `ColorStart` delimiter. `None` for all other kinds.
+    color: Option<SemanticColor>,
 }
 
 impl Delimiter {
@@ -1753,6 +1855,9 @@ impl Delimiter {
             // The GFM spec doesn't fully specify how strikethrough works, so treat it like asterisks.
             DelimiterKind::Strikethrough => left_flanking,
             DelimiterKind::UnderlineStart => left_flanking,
+            // Color spans use explicit `[:name]`...`[:]` pairing handled by
+            // `parse_color_span`, never the CommonMark emphasis loop.
+            DelimiterKind::ColorStart => false,
         };
 
         let can_close = match kind {
@@ -1763,6 +1868,7 @@ impl Delimiter {
             }
             DelimiterKind::Strikethrough => right_flanking,
             DelimiterKind::UnderlineStart => right_flanking,
+            DelimiterKind::ColorStart => false,
         };
 
         Self {
@@ -1773,6 +1879,7 @@ impl Delimiter {
             can_open,
             active: true,
             node_index,
+            color: None,
         }
     }
 
@@ -1814,6 +1921,8 @@ enum DelimiterKind {
     LinkStart,
     Strikethrough,
     UnderlineStart,
+    /// Helm-Warp color-span opener `[:success]`. Closed by `[:]`.
+    ColorStart,
 }
 
 impl DelimiterKind {
@@ -1827,6 +1936,7 @@ impl DelimiterKind {
             // tildes do not create strikethrough.
             DelimiterKind::Strikethrough => count <= 2,
             DelimiterKind::UnderlineStart => count == 1,
+            DelimiterKind::ColorStart => count == 1,
         }
     }
 
@@ -1837,6 +1947,9 @@ impl DelimiterKind {
             DelimiterKind::LinkStart => "[",
             DelimiterKind::Strikethrough => "~",
             DelimiterKind::UnderlineStart => "<u>",
+            // Color span syntax (`[:success]`) is consumed by the parser, not
+            // rendered as literal text, so this is empty.
+            DelimiterKind::ColorStart => "",
         }
     }
 }

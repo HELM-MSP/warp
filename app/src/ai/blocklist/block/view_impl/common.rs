@@ -29,8 +29,8 @@ use warpui::{
         EventHandler, Expanded, Fill, Flex, FormattedTextElement, HeadingFontSizeMultipliers,
         Hoverable, Image as WarpImage, MainAxisAlignment, MainAxisSize, MouseStateHandle,
         NewScrollable, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-        SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Table,
-        TableColumnWidth, TableConfig, TableHeader, TableVerticalSizing, Text, Wrap,
+        SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, SemanticColorPalette,
+        Table, TableColumnWidth, TableConfig, TableHeader, TableVerticalSizing, Text, Wrap,
     },
     fonts::{Properties, Weight},
     image_cache::{CacheOption, ImageType},
@@ -1553,6 +1553,15 @@ pub(super) fn render_rich_text_output_text_section(
         ..Default::default()
     })
     .with_inline_code_properties(Some(inline_code_text_color), Some(inline_code_bg_color))
+    // Helm-Warp: resolve `[:success]`/`[:error]`/... color spans onto theme
+    // terminal colors (green/yellow/red/blue). Spans without a palette render
+    // as plain text, so this is opt-in per render site.
+    .with_semantic_color_palette(Arc::new(SemanticColorPalette {
+        success: theme.terminal_colors().normal.green.into(),
+        warning: theme.terminal_colors().normal.yellow.into(),
+        error: theme.terminal_colors().normal.red.into(),
+        info: theme.terminal_colors().normal.blue.into(),
+    }))
     .set_selectable(props.selectable);
 
     rich_text_element.register_handlers(|mut frame, (line_index, _)| {
