@@ -67,3 +67,5 @@ __pycache__/
 
 # Project notes
 .note/
+sweep.timestamp
+docs/
