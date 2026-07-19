@@ -251,6 +251,17 @@ impl AutoupdateState {
     /// The caller is responsible for checking that we _should_ check for an update. Generally, the
     /// only caller should be [`Self::try_execute_request`].
     fn check_for_update(&mut self, request_type: RequestType, ctx: &mut ModelContext<Self>) {
+        // Helm-Warp fix: the Local/Integration/OSS channels don't ship release
+        // artifacts, so autoupdate is a no-op for them. Previously the poll
+        // still fired, hit fetch_version, and `report_if_error!`'d the
+        // "don't support autoupdate" bail — producing an error popup on every
+        // launch/check for account-free Helm-Warp builds. Short-circuit here
+        // so the expected-noise error is never raised.
+        use warp_core::channel::{Channel, ChannelState};
+        if matches!(ChannelState::channel(), Channel::Local | Channel::Oss | Channel::Integration) {
+            return;
+        }
+
         let current_date = DateTime::now().date_naive();
         let is_daily = self.should_make_daily_request(
             request_type,

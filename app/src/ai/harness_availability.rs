@@ -289,6 +289,15 @@ impl HarnessAvailabilityModel {
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             return;
         }
+        // Helm-Warp fix: Local/OSS/Integration channels are account-free
+        // (is_logged_in is stubbed true so the app launches), so hosted-GraphQL
+        // harness fetches always fail with "missing authentication credentials"
+        // and pop up an error. Short-circuit on these channels — Helm-Warp gets
+        // its harnesses via helm_oz, not Warp's hosted backend.
+        use warp_core::channel::Channel;
+        if matches!(warp_core::channel::ChannelState::channel(), Channel::Local | Channel::Oss | Channel::Integration) {
+            return;
+        }
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         ctx.spawn(

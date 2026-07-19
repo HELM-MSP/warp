@@ -53,6 +53,13 @@ impl UsageHistoryModel {
         if self.is_loading || !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             return;
         }
+        // Helm-Warp fix: Local/OSS/Integration are account-free (is_logged_in
+        // is stubbed true), so the hosted usage-history fetch always fails with
+        // "missing authentication credentials" and pops up. Short-circuit.
+        use warp_core::channel::Channel;
+        if matches!(warp_core::channel::ChannelState::channel(), Channel::Local | Channel::Oss | Channel::Integration) {
+            return;
+        }
 
         // If the user has already loaded some number of entries,
         // we should load that same number of items on refresh so that the list doesn't shrink
