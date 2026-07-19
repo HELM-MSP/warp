@@ -30,7 +30,7 @@ const DEFAULT_LAUNCH_CONFIG_REL: &str = ".config/helm/launch.json";
 /// On-disk launch config written by the Portal launch flow (producer).
 /// All fields optional so a partial/dev file still loads.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[allow(dead_code)] // schema fields: endpoint_id/endpoint_os are informational
+#[allow(dead_code)] // schema fields: endpoint_id/endpoint_os/refresh_* are informational
 pub struct HelmLaunchConfig {
     /// helm_oz base URL, e.g. `http://127.0.0.1:18080`.
     #[serde(default)]
@@ -44,6 +44,13 @@ pub struct HelmLaunchConfig {
     /// Endpoint OS hint (informational; helm_oz also reads HELM_OZ_ENDPOINT_OS).
     #[serde(default)]
     pub endpoint_os: Option<String>,
+    /// Gap 5 refresh token for getting fresh agent JWTs (written by the
+    /// helm-warp exchange consumer).
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    /// Portal refresh endpoint URL.
+    #[serde(default)]
+    pub refresh_url: Option<String>,
 }
 
 /// Resolved helm_oz routing target: where to send the request + which bearer.
