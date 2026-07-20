@@ -441,6 +441,13 @@ pub struct ServerApi {
     eval_user_id: Option<i32>,
 }
 
+/// Determines the helm_oz path and bearer requirements for multi-agent requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HelmOzRoute {
+    Remote,
+    LocalDev,
+}
+
 impl ServerApi {
     fn new(
         auth_state: Arc<AuthState>,
@@ -1224,25 +1231,6 @@ impl ServerApi {
             }
         }
     }
-
-/// Gap 3/4: route a multi-agent request to a helm_oz server.
-///
-/// helm_oz is the brain: it plans, executes on endpoints via Portal MCP, and
-/// synthesizes — Warp just displays. The wire format is identical to Warp's
-/// hosted endpoint: protobuf request body, SSE response of base64-url-safe-
-/// encoded protobuf ResponseEvents.
-///
-/// Route kind for `route_to_helm_oz`. Determines the URL path used and
-/// whether a bearer is required (hw-o8h).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HelmOzRoute {
-    /// Dedicated remote-agent path: `/ai/multi-agent/remote`. The bearer
-    /// is the bound endpoint's agent JWT — required.
-    Remote,
-    /// Local/dev-only path: `/ai/multi-agent`. The bearer is optional;
-    /// a `None` bearer means "local mode in helm_oz".
-    LocalDev,
-}
 
 /// Send a multi-agent request to helm_oz over the chosen route kind.
 ///
