@@ -6,6 +6,7 @@ pub mod integrations;
 pub mod managed_secrets;
 pub mod object;
 pub(crate) mod helm_launch;
+pub(crate) mod helm_tab_binding;
 pub(crate) mod openrouter;
 pub(crate) mod presigned_upload;
 pub mod referral;
