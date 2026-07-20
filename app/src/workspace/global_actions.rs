@@ -9,12 +9,12 @@ use crate::{app_state::get_app_state, server::server_api::ServerApiProvider};
 use ::settings::ToggleableSetting;
 use warp_core::execution_mode::AppExecutionMode;
 
-use crate::ai::agent::conversation::AIConversationId;
+use crate::GlobalResourceHandlesProvider;
 use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::root_view::OpenPath;
 use crate::undo_close::UndoCloseStack;
 use crate::workspace::{Workspace, WorkspaceAction};
-use crate::GlobalResourceHandlesProvider;
 use std::path::PathBuf;
 use warp_graphql::mutations::create_anonymous_user::AnonymousUserType;
 use warpui::windowing::WindowManager;

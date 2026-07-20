@@ -104,14 +104,16 @@ fn transfer_control_finished_result_converts_to_tool_call_result_input() {
 // macOS/zsh/local hostname must not leak into /ai/multi-agent/remote payloads.
 #[test]
 fn convert_context_drops_execution_environment_when_remote() {
-    let ctx = vec![AIAgentContext::ExecutionEnvironment(WarpAiExecutionContext {
-        os: WarpAiOsContext {
-            category: Some("darwin".to_string()),
-            distribution: Some("macOS".to_string()),
+    let ctx = vec![AIAgentContext::ExecutionEnvironment(
+        WarpAiExecutionContext {
+            os: WarpAiOsContext {
+                category: Some("darwin".to_string()),
+                distribution: Some("macOS".to_string()),
+            },
+            shell_name: "zsh".to_string(),
+            shell_version: Some("5.9".to_string()),
         },
-        shell_name: "zsh".to_string(),
-        shell_version: Some("5.9".to_string()),
-    })];
+    )];
 
     let api_ctx = convert_context(&ctx, true);
     assert!(
@@ -126,14 +128,16 @@ fn convert_context_drops_execution_environment_when_remote() {
 
 #[test]
 fn convert_context_preserves_execution_environment_when_local() {
-    let ctx = vec![AIAgentContext::ExecutionEnvironment(WarpAiExecutionContext {
-        os: WarpAiOsContext {
-            category: Some("darwin".to_string()),
-            distribution: Some("macOS".to_string()),
+    let ctx = vec![AIAgentContext::ExecutionEnvironment(
+        WarpAiExecutionContext {
+            os: WarpAiOsContext {
+                category: Some("darwin".to_string()),
+                distribution: Some("macOS".to_string()),
+            },
+            shell_name: "zsh".to_string(),
+            shell_version: Some("5.9".to_string()),
         },
-        shell_name: "zsh".to_string(),
-        shell_version: Some("5.9".to_string()),
-    })];
+    )];
 
     let api_ctx = convert_context(&ctx, false);
     let shell = api_ctx.shell.expect("local request keeps shell info");

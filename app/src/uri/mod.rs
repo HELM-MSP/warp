@@ -11,7 +11,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
-use crate::root_view::{open_new_window_get_handles, OpenLaunchConfigArg};
+use crate::root_view::{OpenLaunchConfigArg, open_new_window_get_handles};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::tab_configs::TabConfig;
@@ -28,10 +28,10 @@ use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
 use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
 use crate::{
-    quake_mode_window_id, quake_mode_window_is_open, safe_info, send_telemetry_from_app_ctx,
-    ChannelState, OpenPath,
+    ChannelState, OpenPath, quake_mode_window_id, quake_mode_window_is_open, safe_info,
+    send_telemetry_from_app_ctx,
 };
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use itertools::Itertools;
 use session_sharing_protocol::common::SessionId;
 use std::collections::HashMap;
@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use url::Url;
 use warpui::notification::UserNotification;
-use warpui::{platform::TerminationMode, SingletonEntity as _, TypedActionView};
+use warpui::{SingletonEntity as _, TypedActionView, platform::TerminationMode};
 
 use warpui::{AppContext, EntityId, ViewHandle, WindowId};
 
@@ -1089,12 +1089,32 @@ pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
     // currently-active window.
     let primary_window_id = get_primary_window(ctx.windows().frontmost_window_id(), ctx);
 
-    // Helm-Warp launch scheme (`helm-warp://connect?...`): exchange the code
-    // for launch credentials and write launch.json. Handled before the custom
-    // URI validation below because it is a distinct scheme with its own
-    // (async, side-effecting) semantics — not a window/launch-config action.
     if helm_warp::is_helm_warp_url(url) {
-        helm_warp::handle(url, ctx);
+        let action = match helm_warp::parse_action(url) {
+            Ok(action) => action,
+            Err(error) => {
+                log::warn!("invalid helm-warp launch URL: {error:#}");
+                if let Some(window_id) = primary_window_id {
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error("Invalid Helm launch link.".to_string()),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                }
+                return;
+            }
+        };
+        let window_id =
+            primary_window_id.unwrap_or_else(|| open_new_window_get_handles(None, ctx).0);
+        let Some(workspace) = WorkspaceRegistry::as_ref(ctx).get(window_id, ctx) else {
+            log::warn!("no workspace found in window {window_id} for helm-warp launch");
+            return;
+        };
+        workspace.update(ctx, |workspace, ctx| {
+            workspace.handle_action(&action, ctx);
+        });
         return;
     }
 
@@ -1215,7 +1235,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
         #[cfg(feature = "local_fs")]
         {
             use crate::code::editor_management::CodeSource;
-            use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+            use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
             use crate::util::{
                 file::external_editor::EditorSettings,
                 openable_file_type::resolve_file_target_to_open_in_warp,

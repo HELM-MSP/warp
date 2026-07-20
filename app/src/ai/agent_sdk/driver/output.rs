@@ -839,9 +839,7 @@ pub mod json {
                     }),
                     RequestCommandOutputResult::LocalFallbackRefused { reason } => {
                         Some(JsonMessage::ToolError {
-                            error: Cow::Owned(format!(
-                                "Local shell execution refused: {reason}"
-                            )),
+                            error: Cow::Owned(format!("Local shell execution refused: {reason}")),
                         })
                     }
                 },
@@ -871,9 +869,7 @@ pub mod json {
                     }
                     WriteToLongRunningShellCommandResult::LocalFallbackRefused { reason } => {
                         Some(JsonMessage::ToolError {
-                            error: Cow::Owned(format!(
-                                "Local shell write refused: {reason}"
-                            )),
+                            error: Cow::Owned(format!("Local shell write refused: {reason}")),
                         })
                     }
                 },

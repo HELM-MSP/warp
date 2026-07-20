@@ -258,7 +258,10 @@ impl AutoupdateState {
         // launch/check for account-free Helm-Warp builds. Short-circuit here
         // so the expected-noise error is never raised.
         use warp_core::channel::{Channel, ChannelState};
-        if matches!(ChannelState::channel(), Channel::Local | Channel::Oss | Channel::Integration) {
+        if matches!(
+            ChannelState::channel(),
+            Channel::Local | Channel::Oss | Channel::Integration
+        ) {
             return;
         }
 

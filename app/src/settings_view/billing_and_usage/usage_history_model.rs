@@ -57,7 +57,10 @@ impl UsageHistoryModel {
         // is stubbed true), so the hosted usage-history fetch always fails with
         // "missing authentication credentials" and pops up. Short-circuit.
         use warp_core::channel::Channel;
-        if matches!(warp_core::channel::ChannelState::channel(), Channel::Local | Channel::Oss | Channel::Integration) {
+        if matches!(
+            warp_core::channel::ChannelState::channel(),
+            Channel::Local | Channel::Oss | Channel::Integration
+        ) {
             return;
         }
 

@@ -1,7 +1,7 @@
 use super::hoa_onboarding;
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
-use crate::auth::auth_manager::AuthManagerEvent;
 use crate::auth::AuthManager;
+use crate::auth::auth_manager::AuthManagerEvent;
 use crate::channel::{Channel, ChannelState};
 use crate::settings::cloud_preferences_syncer::{
     CloudPreferencesSyncer, CloudPreferencesSyncerEvent,

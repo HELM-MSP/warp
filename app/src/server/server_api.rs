@@ -2,11 +2,11 @@ pub mod ai;
 pub mod auth;
 pub mod block;
 pub mod harness_support;
+pub(crate) mod helm_launch;
+pub(crate) mod helm_tab_binding;
 pub mod integrations;
 pub mod managed_secrets;
 pub mod object;
-pub(crate) mod helm_launch;
-pub(crate) mod helm_tab_binding;
 pub(crate) mod openrouter;
 pub(crate) mod presigned_upload;
 pub mod referral;
@@ -1232,64 +1232,67 @@ impl ServerApi {
         }
     }
 
-/// Send a multi-agent request to helm_oz over the chosen route kind.
-///
-/// `bearer` semantics depend on the kind: `Remote` requires a non-empty
-/// bearer (the binding's agent_token); `LocalDev` may pass `None` for
-/// the existing dev bridge behavior. The remote path uses
-/// `/ai/multi-agent/remote` — distinct from the local path so helm_oz
-/// can reject mismatched routes (e.g. a remote JWT landing on the
-/// generic `/ai/multi-agent`).
-async fn route_to_helm_oz(
-    client: &http_client::Client,
-    request: &warp_multi_agent_api::Request,
-    oz_url: &str,
-    bearer: Option<&str>,
-    kind: HelmOzRoute,
-) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>> {
-    let url = match kind {
-        HelmOzRoute::Remote => format!("{}/ai/multi-agent/remote", oz_url.trim_end_matches('/')),
-        HelmOzRoute::LocalDev => format!("{}/ai/multi-agent", oz_url.trim_end_matches('/')),
-    };
-    let request_builder = client
-        .post(url)
-        .proto(request)
-        .prevent_sleep("helm_oz multi-agent request");
-    let request_builder = match bearer {
-        Some(token) => request_builder.bearer_auth(token),
-        None => request_builder,
-    };
-
-    let output_stream = request_builder.eventsource().filter_map(|event| async {
-        let result = match event {
-            Ok(reqwest_eventsource::Event::Message(message_event)) => {
-                match BASE64_URL_SAFE.decode(message_event.data.trim_matches('"')) {
-                    Ok(decoded_data) => {
-                        let action = warp_multi_agent_api::ResponseEvent::decode(
-                            decoded_data.as_slice(),
-                        );
-                        Some(action.map_err(|e| AIApiError::Other(anyhow::Error::from(e))))
-                    }
-                    Err(e) => Some(Err(AIApiError::Other(anyhow::Error::from(e)))),
-                }
+    /// Send a multi-agent request to helm_oz over the chosen route kind.
+    ///
+    /// `bearer` semantics depend on the kind: `Remote` requires a non-empty
+    /// bearer (the binding's agent_token); `LocalDev` may pass `None` for
+    /// the existing dev bridge behavior. The remote path uses
+    /// `/ai/multi-agent/remote` — distinct from the local path so helm_oz
+    /// can reject mismatched routes (e.g. a remote JWT landing on the
+    /// generic `/ai/multi-agent`).
+    async fn route_to_helm_oz(
+        client: &http_client::Client,
+        request: &warp_multi_agent_api::Request,
+        oz_url: &str,
+        bearer: Option<&str>,
+        kind: HelmOzRoute,
+    ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
+    {
+        let url = match kind {
+            HelmOzRoute::Remote => {
+                format!("{}/ai/multi-agent/remote", oz_url.trim_end_matches('/'))
             }
-            Ok(reqwest_eventsource::Event::Open) => None,
-            Err(err) => Some(Err(
-                AIApiError::from_stream_error("RouteToHelmOz", err).await
-            )),
-        }
-        .map(|item| item.map_err(Arc::new));
-        result
-    });
+            HelmOzRoute::LocalDev => format!("{}/ai/multi-agent", oz_url.trim_end_matches('/')),
+        };
+        let request_builder = client
+            .post(url)
+            .proto(request)
+            .prevent_sleep("helm_oz multi-agent request");
+        let request_builder = match bearer {
+            Some(token) => request_builder.bearer_auth(token),
+            None => request_builder,
+        };
 
-    cfg_if::cfg_if! {
-        if #[cfg(target_family = "wasm")] {
-            Ok(output_stream.boxed_local())
-        } else {
-            Ok(output_stream.boxed())
+        let output_stream = request_builder.eventsource().filter_map(|event| async {
+            let result = match event {
+                Ok(reqwest_eventsource::Event::Message(message_event)) => {
+                    match BASE64_URL_SAFE.decode(message_event.data.trim_matches('"')) {
+                        Ok(decoded_data) => {
+                            let action = warp_multi_agent_api::ResponseEvent::decode(
+                                decoded_data.as_slice(),
+                            );
+                            Some(action.map_err(|e| AIApiError::Other(anyhow::Error::from(e))))
+                        }
+                        Err(e) => Some(Err(AIApiError::Other(anyhow::Error::from(e)))),
+                    }
+                }
+                Ok(reqwest_eventsource::Event::Open) => None,
+                Err(err) => Some(Err(
+                    AIApiError::from_stream_error("RouteToHelmOz", err).await
+                )),
+            }
+            .map(|item| item.map_err(Arc::new));
+            result
+        });
+
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                Ok(output_stream.boxed_local())
+            } else {
+                Ok(output_stream.boxed())
+            }
         }
     }
-}
 
     /// Route a multi-agent request to the appropriate backend.
     ///

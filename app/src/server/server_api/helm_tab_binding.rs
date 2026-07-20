@@ -207,10 +207,7 @@ pub enum BindingError {
     NotFrozen,
     /// Attempted to rebind to a different endpoint. Refused — open a new
     /// tab.
-    EndpointMismatch {
-        existing: String,
-        attempted: String,
-    },
+    EndpointMismatch { existing: String, attempted: String },
     /// Constructed binding was missing one or more required fields.
     Incomplete(BindingIncomplete),
 }
@@ -220,7 +217,10 @@ impl std::fmt::Display for BindingError {
         match self {
             BindingError::AlreadyFrozen => f.write_str("helm tab binding already frozen"),
             BindingError::NotFrozen => f.write_str("helm tab binding not frozen"),
-            BindingError::EndpointMismatch { existing, attempted } => write!(
+            BindingError::EndpointMismatch {
+                existing,
+                attempted,
+            } => write!(
                 f,
                 "helm tab endpoint rebind refused (frozen={existing}, attempted={attempted})"
             ),
@@ -239,7 +239,11 @@ pub struct BindingIncomplete {
 
 impl std::fmt::Display for BindingIncomplete {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "helm tab binding incomplete (missing: {:?})", self.missing)
+        write!(
+            f,
+            "helm tab binding incomplete (missing: {:?})",
+            self.missing
+        )
     }
 }
 
@@ -315,9 +319,22 @@ mod tests {
         )
     }
 
+    fn freeze_remote_from_tuple(
+        fields: (
+            Option<&str>,
+            Option<&str>,
+            Option<&str>,
+            Option<&str>,
+            Option<&str>,
+            Option<&str>,
+        ),
+    ) -> Result<HelmEndpointBinding, BindingIncomplete> {
+        freeze_remote(fields.0, fields.1, fields.2, fields.3, fields.4, fields.5)
+    }
+
     #[test]
     fn freeze_remote_with_all_required_fields_succeeds() {
-        let b = freeze_remote(full_args()).expect("complete args");
+        let b = freeze_remote_from_tuple(full_args()).expect("complete args");
         assert_eq!(b.endpoint_id, "ep-1");
         assert_eq!(b.endpoint_friendly_label, "operator-laptop");
         assert_eq!(b.endpoint_hostname, "laptop.local");
@@ -330,7 +347,7 @@ mod tests {
     fn freeze_remote_missing_agent_token_fails_closed() {
         let mut a = full_args();
         a.5 = None;
-        let err = freeze_remote(a).unwrap_err();
+        let err = freeze_remote_from_tuple(a).unwrap_err();
         assert_eq!(err.missing, vec!["agent_token"]);
     }
 
@@ -344,14 +361,14 @@ mod tests {
             Some("http://127.0.0.1:18080"),
             Some("jwt-A"),
         );
-        let err = freeze_remote(a).unwrap_err();
+        let err = freeze_remote_from_tuple(a).unwrap_err();
         assert_eq!(err.missing, vec!["endpoint_friendly_label"]);
     }
 
     #[test]
     fn freeze_remote_lists_every_missing_field() {
         let a: [Option<&str>; 6] = [None, None, None, None, None, None];
-        let err = freeze_remote(a).unwrap_err();
+        let err = freeze_remote_from_tuple(a).unwrap_err();
         assert_eq!(err.missing.len(), 6);
     }
 
@@ -365,13 +382,13 @@ mod tests {
     #[test]
     fn slot_freeze_remote_installs_binding_once() {
         let slot = HelmTabBinding::new();
-        let b = freeze_remote(full_args()).unwrap();
+        let b = freeze_remote_from_tuple(full_args()).unwrap();
         slot.freeze_remote(b.clone()).unwrap();
         assert!(slot.is_remote());
         assert_eq!(slot.get().unwrap().endpoint_id, "ep-1");
 
         // Second freeze refuses.
-        let b2 = freeze_remote(full_args()).unwrap();
+        let b2 = freeze_remote_from_tuple(full_args()).unwrap();
         let err = slot.freeze_remote(b2).unwrap_err();
         assert_eq!(err, BindingError::AlreadyFrozen);
     }
@@ -379,7 +396,8 @@ mod tests {
     #[test]
     fn slot_try_rebind_to_same_endpoint_rotates_token() {
         let slot = HelmTabBinding::new();
-        slot.freeze_remote(freeze_remote(full_args()).unwrap()).unwrap();
+        slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
 
         // Same endpoint, fresh token: allowed.
         let candidate = HelmEndpointBinding::for_test(
@@ -397,7 +415,8 @@ mod tests {
     #[test]
     fn slot_try_rebind_to_different_endpoint_refused() {
         let slot = HelmTabBinding::new();
-        slot.freeze_remote(freeze_remote(full_args()).unwrap()).unwrap();
+        slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
 
         // Different endpoint: refused.
         let candidate = HelmEndpointBinding::for_test(
@@ -424,7 +443,8 @@ mod tests {
     #[test]
     fn slot_refresh_token_same_endpoint_rotates() {
         let slot = HelmTabBinding::new();
-        slot.freeze_remote(freeze_remote(full_args()).unwrap()).unwrap();
+        slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
 
         slot.try_refresh_token(
             (
@@ -443,7 +463,8 @@ mod tests {
     #[test]
     fn slot_refresh_token_different_endpoint_refused() {
         let slot = HelmTabBinding::new();
-        slot.freeze_remote(freeze_remote(full_args()).unwrap()).unwrap();
+        slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
 
         let err = slot
             .try_refresh_token(
@@ -464,7 +485,8 @@ mod tests {
     #[test]
     fn slot_refresh_token_blank_refused() {
         let slot = HelmTabBinding::new();
-        slot.freeze_remote(freeze_remote(full_args()).unwrap()).unwrap();
+        slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
 
         let err = slot
             .try_refresh_token(
@@ -486,7 +508,8 @@ mod tests {
         let slot = HelmTabBinding::new();
         slot.clear();
         assert!(!slot.is_remote());
-        slot.freeze_remote(freeze_remote(full_args()).unwrap()).unwrap();
+        slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
         slot.clear();
         assert!(!slot.is_remote());
         slot.clear();
@@ -516,7 +539,7 @@ mod tests {
             "http://b.helm:18080",
             "jwt-B",
         );
-        slot_a.freeze_remote(a).unwrap();
+        slot_a.freeze_remote_from_tuple(a).unwrap();
         slot_b.freeze_remote(b).unwrap();
 
         assert_eq!(slot_a.get().unwrap().endpoint_id, "ep-A");
@@ -527,7 +550,13 @@ mod tests {
         // Refresh A doesn't touch B.
         slot_a
             .try_refresh_token(
-                ("ep-A", "laptop-A", "laptop-a.local", "macos", "http://a.helm:18080"),
+                (
+                    "ep-A",
+                    "laptop-A",
+                    "laptop-a.local",
+                    "macos",
+                    "http://a.helm:18080",
+                ),
                 "jwt-A-REFRESHED",
             )
             .unwrap();

@@ -48,10 +48,14 @@ fn local_fallback_refused_write_converts_to_typed_error() {
     .expect("refusal must serialize as typed tool error, not Ignore");
     match result {
         api::request::input::tool_call_result::Result::WriteToLongRunningShellCommand(
-            api::WriteToLongRunningShellCommandResult { result: Some(inner) },
+            api::WriteToLongRunningShellCommandResult {
+                result: Some(inner),
+            },
         ) => match inner {
             api::write_to_long_running_shell_command_result::Result::Error(
-                api::ShellCommandError { r#type: Some(api::shell_command_error::Type::CommandNotFound(())) },
+                api::ShellCommandError {
+                    r#type: Some(api::shell_command_error::Type::CommandNotFound(())),
+                },
             ) => {}
             other => panic!("expected typed CommandNotFound shell error, got {other:?}"),
         },
@@ -76,9 +80,9 @@ fn local_fallback_refused_read_converts_to_typed_error() {
         ) => {
             assert_eq!(command, "", "refusal carries no command payload");
             match inner {
-                api::read_shell_command_output_result::Result::Error(
-                    api::ShellCommandError { r#type: Some(api::shell_command_error::Type::CommandNotFound(())) },
-                ) => {}
+                api::read_shell_command_output_result::Result::Error(api::ShellCommandError {
+                    r#type: Some(api::shell_command_error::Type::CommandNotFound(())),
+                }) => {}
                 other => panic!("expected typed CommandNotFound shell error, got {other:?}"),
             }
         }
@@ -96,10 +100,14 @@ fn local_fallback_refused_transfer_converts_to_typed_error() {
     .expect("refusal must serialize as typed tool error, not Ignore");
     match result {
         api::request::input::tool_call_result::Result::TransferShellCommandControlToUser(
-            api::TransferShellCommandControlToUserResult { result: Some(inner) },
+            api::TransferShellCommandControlToUserResult {
+                result: Some(inner),
+            },
         ) => match inner {
             api::transfer_shell_command_control_to_user_result::Result::Error(
-                api::ShellCommandError { r#type: Some(api::shell_command_error::Type::CommandNotFound(())) },
+                api::ShellCommandError {
+                    r#type: Some(api::shell_command_error::Type::CommandNotFound(())),
+                },
             ) => {}
             other => panic!("expected typed CommandNotFound shell error, got {other:?}"),
         },
@@ -127,11 +135,9 @@ fn local_fallback_refused_request_command_converts_to_typed_denial() {
                 ..
             },
         ) => match inner {
-            api::run_shell_command_result::Result::PermissionDenied(
-                api::PermissionDenied {
-                    reason: Some(api::permission_denied::Reason::DenylistedCommand(())),
-                },
-            ) => {}
+            api::run_shell_command_result::Result::PermissionDenied(api::PermissionDenied {
+                reason: Some(api::permission_denied::Reason::DenylistedCommand(())),
+            }) => {}
             other => panic!("expected typed PermissionDenied/DenylistedCommand, got {other:?}"),
         },
         other => panic!("expected run-shell-command result, got {other:?}"),
@@ -169,5 +175,9 @@ fn local_fallback_refused_does_not_abort_request_construction() {
         )
         .unwrap(),
     ];
-    assert_eq!(variants.len(), 4, "all four refusal variants must serialize");
+    assert_eq!(
+        variants.len(),
+        4,
+        "all four refusal variants must serialize"
+    );
 }

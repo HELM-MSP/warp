@@ -279,7 +279,9 @@ pub enum WriteToLongRunningShellCommandResult {
     Cancelled,
     Error(ShellCommandError),
     /// Endpoint-bound session refuses local long-running shell writes.
-    LocalFallbackRefused { reason: String },
+    LocalFallbackRefused {
+        reason: String,
+    },
 }
 
 impl Display for WriteToLongRunningShellCommandResult {
@@ -583,7 +585,9 @@ pub enum ReadShellCommandOutputResult {
     Cancelled,
     Error(ShellCommandError),
     /// Endpoint-bound session refuses reading local long-running shell output.
-    LocalFallbackRefused { reason: String },
+    LocalFallbackRefused {
+        reason: String,
+    },
 }
 
 impl Display for ReadShellCommandOutputResult {
@@ -1383,7 +1387,9 @@ pub enum TransferShellCommandControlToUserResult {
     Cancelled,
     Error(ShellCommandError),
     /// Endpoint-bound session refuses transferring local shell control.
-    LocalFallbackRefused { reason: String },
+    LocalFallbackRefused {
+        reason: String,
+    },
 }
 
 impl Display for TransferShellCommandControlToUserResult {

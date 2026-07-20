@@ -240,9 +240,7 @@ pub async fn generate_helm_openrouter_output(
         .ok()
         .filter(|tag| !tag.trim().is_empty());
 
-    log::info!(
-        "helm: OpenRouter adapter handling multi-agent request (model={model})"
-    );
+    log::info!("helm: OpenRouter adapter handling multi-agent request (model={model})");
 
     let openrouter_request = build_openrouter_request(request, model);
     let conversation_id = conversation_id_from_request(request);
@@ -264,7 +262,10 @@ pub async fn generate_helm_openrouter_output(
         .await
         .map_err(|e| Arc::new(AIApiError::Transport(e)))?;
 
-    log::info!("helm: OpenRouter responded with status {}", response.status());
+    log::info!(
+        "helm: OpenRouter responded with status {}",
+        response.status()
+    );
 
     if let Err(err) = response.error_for_status_ref() {
         let status = err.source.status().unwrap_or(http::StatusCode::BAD_REQUEST);

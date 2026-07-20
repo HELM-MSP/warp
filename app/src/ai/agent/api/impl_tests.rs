@@ -266,8 +266,7 @@ fn local_cli_tools_omit_transfer_control_when_flag_is_disabled() {
 
 #[test]
 fn remote_session_context_is_remote_is_true() {
-    let params =
-        request_params_for_remote(Some(HostId::new("endpoint-A".to_string())));
+    let params = request_params_for_remote(Some(HostId::new("endpoint-A".to_string())));
     assert!(params.session_context.is_remote());
 
     let params2 = request_params_for_remote(None);
@@ -281,10 +280,8 @@ fn remote_session_context_is_remote_is_true() {
 // session_context is the binding carrier — verify they don't share it.
 #[test]
 fn two_simultaneous_endpoints_have_independent_session_contexts() {
-    let params_a =
-        request_params_for_remote(Some(HostId::new("endpoint-A".to_string())));
-    let params_b =
-        request_params_for_remote(Some(HostId::new("endpoint-B".to_string())));
+    let params_a = request_params_for_remote(Some(HostId::new("endpoint-A".to_string())));
+    let params_b = request_params_for_remote(Some(HostId::new("endpoint-B".to_string())));
 
     assert_ne!(
         params_a.session_context.session_type(),

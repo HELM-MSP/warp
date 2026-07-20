@@ -210,7 +210,10 @@ mod tests {
         let _g = env_lock().lock().unwrap();
         std::env::set_var(HELM_LAUNCH_CONFIG_ENV, "/tmp/helm-bad.json");
         std::fs::write("/tmp/helm-bad.json", "not json {").unwrap();
-        assert!(read_launch_config().is_none(), "malformed JSON must not panic");
+        assert!(
+            read_launch_config().is_none(),
+            "malformed JSON must not panic"
+        );
         std::fs::remove_file("/tmp/helm-bad.json").ok();
         std::env::remove_var(HELM_LAUNCH_CONFIG_ENV);
     }
@@ -269,7 +272,10 @@ mod tests {
         std::env::remove_var(HELM_OZ_BEARER_ENV);
         let target = launch_target().expect("env URL set → Some");
         assert_eq!(target.helm_oz_url, "http://from-env");
-        assert!(target.agent_token.is_none(), "no bearer → local mode target");
+        assert!(
+            target.agent_token.is_none(),
+            "no bearer → local mode target"
+        );
         std::env::remove_var(HELM_LAUNCH_CONFIG_ENV);
         std::env::remove_var(HELM_OZ_URL_ENV);
     }
@@ -293,8 +299,7 @@ mod tests {
         // Set env to a different URL.
         std::env::set_var(HELM_OZ_URL_ENV, "http://from-env");
         std::env::set_var(HELM_OZ_BEARER_ENV, "env-bearer");
-        let target =
-            env_only_local_target().expect("env URL set → Some");
+        let target = env_only_local_target().expect("env URL set → Some");
         assert_eq!(
             target.helm_oz_url, "http://from-env",
             "env_only_local_target must NOT read launch.json"

@@ -73,12 +73,12 @@
 ///
 /// View transfers between windows are handled by `transfer_view_tree_to_window`.
 use crate::tab::tab_position_id;
-use crate::workspace::view::{tab_bar_rects_for_window, TransferredTab, TAB_BAR_POSITION_ID};
 use crate::workspace::WorkspaceRegistry;
+use crate::workspace::view::{TAB_BAR_POSITION_ID, TransferredTab, tab_bar_rects_for_window};
 use pathfinder_geometry::rect::RectF;
 use std::collections::HashSet;
 use warpui::elements::DraggableState;
-use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::platform::TerminationMode;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};

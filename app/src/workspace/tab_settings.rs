@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
+    RespectUserSyncSetting, SupportedPlatforms, SyncToCloud, macros::define_settings_group,
 };
 use warp_core::ui::theme::AnsiColorIdentifier;
 

@@ -110,9 +110,7 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                         exit_code: Default::default(),
                         result: Some(api::run_shell_command_result::Result::PermissionDenied(
                             api::PermissionDenied {
-                                reason: Some(
-                                    api::permission_denied::Reason::DenylistedCommand(()),
-                                ),
+                                reason: Some(api::permission_denied::Reason::DenylistedCommand(())),
                             },
                         )),
                     },

@@ -2853,7 +2853,11 @@ fn test_color_span_all_palette_names() {
         ("blue", SemanticColor::Info),
     ] {
         let fragments = parse_inline_markdown(&format!("[:{name}]x[:]"));
-        assert_eq!(fragments.len(), 1, "name `{name}` should parse as one fragment");
+        assert_eq!(
+            fragments.len(),
+            1,
+            "name `{name}` should parse as one fragment"
+        );
         assert_eq!(fragments[0].text, "x");
         assert_eq!(fragments[0].styles.color, Some(expected), "name `{name}`");
     }
@@ -2867,7 +2871,10 @@ fn test_color_span_combines_with_inner_emphasis() {
     assert_eq!(fragments.len(), 1);
     assert_eq!(fragments[0].text, "bold");
     assert_eq!(fragments[0].styles.color, Some(SemanticColor::Error));
-    assert!(fragments[0].styles.weight.is_some(), "inner bold must still apply");
+    assert!(
+        fragments[0].styles.weight.is_some(),
+        "inner bold must still apply"
+    );
 }
 
 #[test]
@@ -2898,10 +2905,10 @@ fn test_color_span_unclosed_is_literal_text() {
 fn test_color_span_preserves_surrounding_text() {
     use crate::SemanticColor;
     let fragments = parse_inline_markdown("before [:success]ok[:] after");
-    let has_colored = fragments.iter().any(|f| f.styles.color == Some(SemanticColor::Success));
+    let has_colored = fragments
+        .iter()
+        .any(|f| f.styles.color == Some(SemanticColor::Success));
     assert!(has_colored, "the span must be colored");
     let combined: String = fragments.iter().map(|f| f.text.as_str()).collect();
     assert_eq!(combined, "before ok after");
 }
-
-

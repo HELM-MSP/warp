@@ -231,10 +231,7 @@ impl SessionContext {
         if self.helm_tab_binding.is_some()
             && matches!(self.session_type, None | Some(SessionType::Local))
         {
-            (
-                Some(SessionType::WarpifiedRemote { host_id: None }),
-                true,
-            )
+            (Some(SessionType::WarpifiedRemote { host_id: None }), true)
         } else {
             (self.session_type.clone(), false)
         }

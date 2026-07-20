@@ -1500,8 +1500,10 @@ impl BlocklistAIActionModel {
         app: &warpui::AppContext,
     ) -> Option<AIAgentActionResultType> {
         use crate::terminal::model::session::SessionType;
-        let is_remote =
-            matches!(self.active_session.as_ref(app).session_type(app), Some(SessionType::WarpifiedRemote { .. }));
+        let is_remote = matches!(
+            self.active_session.as_ref(app).session_type(app),
+            Some(SessionType::WarpifiedRemote { .. })
+        );
         if !is_remote {
             return None;
         }
