@@ -4367,12 +4367,13 @@ impl Workspace {
 
     /// Add a new terminal tab and enter the agent view with a new conversation.
     fn add_terminal_tab_with_new_agent_view(&mut self, ctx: &mut ViewContext<Self>) {
-        self.add_terminal_tab_with_new_agent_view_and_helm_binding(None, ctx);
+        self.add_terminal_tab_with_new_agent_view_and_helm_binding(None, None, ctx);
     }
 
     fn add_terminal_tab_with_new_agent_view_and_helm_binding(
         &mut self,
         helm_binding: Option<HelmEndpointBinding>,
+        refresh_descriptor: Option<crate::uri::helm_warp::HelmRefreshDescriptor>,
         ctx: &mut ViewContext<Self>,
     ) {
         let was_left_panel_open = self.active_tab_pane_group().as_ref(ctx).left_panel_open;
@@ -4396,6 +4397,13 @@ impl Workspace {
                     return;
                 }
                 pane_group.set_title(&title, ctx);
+                if let Some(descriptor) = refresh_descriptor {
+                    crate::uri::helm_warp::start_helm_refresh_loop(
+                        pane_group,
+                        descriptor,
+                        ctx,
+                    );
+                }
             }
             if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                 terminal_view.update(ctx, |view, ctx| {
@@ -4419,10 +4427,11 @@ impl Workspace {
         let display_endpoint_id = endpoint_id.clone();
         ctx.spawn(
             crate::uri::helm_warp::run_exchange(portal, exchange, endpoint_id),
-            move |workspace, result, ctx| match result {
-                Ok(binding) => {
+            move |workspace, outcome, ctx| match outcome {
+                Ok(outcome) => {
                     workspace.add_terminal_tab_with_new_agent_view_and_helm_binding(
-                        Some(binding),
+                        Some(outcome.binding),
+                        outcome.refresh_descriptor,
                         ctx,
                     );
                 }

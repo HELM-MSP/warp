@@ -5508,6 +5508,14 @@ impl PaneGroup {
         self.helm_tab_binding.get()
     }
 
+    /// Borrow the underlying [`HelmTabBinding`] slot. Used by the per-tab
+    /// refresh loop (called from `crate::uri::helm_warp::start_helm_refresh_loop`)
+    /// to apply JWT rotations. The slot enforces same-endpoint identity, so
+    /// a misuse here still fails closed.
+    pub fn helm_tab_binding_slot(&self) -> &HelmTabBinding {
+        &self.helm_tab_binding
+    }
+
     /// Returns `true` if this tab has a remote Helm binding installed.
     /// Used by guardrails that key on remote status (tool stripping,
     /// local-fallback refusal, OpenRouter conversion) — a remote-bound

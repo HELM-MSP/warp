@@ -40,6 +40,43 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde::Serialize;
 
+/// Stable, cloneable endpoint identity used to compare bindings across
+/// rebind/refresh calls. Owns its own Strings so callers (the refresh
+/// loop in particular) can carry it without borrowing the parent binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndpointIdentity {
+    pub endpoint_id: String,
+    pub endpoint_friendly_label: String,
+    pub endpoint_hostname: String,
+    pub endpoint_os: String,
+    pub helm_oz_url: String,
+}
+
+impl EndpointIdentity {
+    /// Snapshot the five non-token identity fields from a binding.
+    pub fn from_binding(b: &HelmEndpointBinding) -> Self {
+        Self {
+            endpoint_id: b.endpoint_id.clone(),
+            endpoint_friendly_label: b.endpoint_friendly_label.clone(),
+            endpoint_hostname: b.endpoint_hostname.clone(),
+            endpoint_os: b.endpoint_os.clone(),
+            helm_oz_url: b.helm_oz_url.clone(),
+        }
+    }
+
+    /// Tuple form retained for callers that prefer to compare without
+    /// allocating. Two identities are equal iff all five fields match.
+    pub fn as_tuple(&self) -> (&str, &str, &str, &str, &str) {
+        (
+            &self.endpoint_id,
+            &self.endpoint_friendly_label,
+            &self.endpoint_hostname,
+            &self.endpoint_os,
+            &self.helm_oz_url,
+        )
+    }
+}
+
 /// Endpoint identity + routing target frozen at tab-open time.
 ///
 /// Fields are all required (non-blank) for the binding to construct. See
@@ -94,6 +131,21 @@ impl HelmEndpointBinding {
             &self.endpoint_os,
             &self.helm_oz_url,
         )
+    }
+
+    /// Owned clone of the endpoint identity (no token). Useful for the
+    /// refresh loop, which needs to carry the identity across an await
+    /// point without borrowing the binding.
+    pub fn endpoint_identity_owned(&self) -> EndpointIdentity {
+        EndpointIdentity::from_binding(self)
+    }
+
+    /// Snapshot the identity inside an `Arc<HelmEndpointBinding>` — the
+    /// refresh loop keeps this around across the refresh call so a
+    /// mid-flight rebind on the same tab is visible when we get the
+    /// response back.
+    pub fn endpoint_identity_arc(binding: &Arc<HelmEndpointBinding>) -> EndpointIdentity {
+        EndpointIdentity::from_binding(binding)
     }
 }
 
