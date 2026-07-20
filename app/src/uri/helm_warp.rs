@@ -345,6 +345,7 @@ async fn helm_refresh_step(
 /// Categorized error for one refresh step. Distinguishes "retry next cycle"
 /// (transport) from "stop" (HTTP non-success, parse failure).
 #[derive(Debug)]
+#[allow(dead_code)] // field values are diagnostic-only; loop only branches on the variant
 pub enum RefreshStepError {
     ClientBuild(reqwest::Error),
     Http(reqwest::Error),
@@ -357,26 +358,25 @@ pub enum RefreshStepError {
 /// Spawns the first step via `ctx.spawn`; each step chains itself on
 /// success. Closes naturally when the PaneGroup view is dropped.
 pub fn start_helm_refresh_loop(
-    pane_group: &mut crate::pane_group::PaneGroup,
     descriptor: HelmRefreshDescriptor,
     ctx: &mut warpui::ViewContext<crate::pane_group::PaneGroup>,
 ) {
     let endpoint_id = descriptor.endpoint_identity.endpoint_id.clone();
-    let descriptor_for_chain = descriptor.clone();
+    let descriptor_for_step = descriptor.clone();
+    let descriptor_for_chain = descriptor;
     ctx.spawn(
-        helm_refresh_step(descriptor),
+        helm_refresh_step(descriptor_for_step),
         move |pane_group, result, ctx| {
             match result {
                 Ok(response) => {
                     let continued = apply_refresh_to_slot(
                         pane_group.helm_tab_binding_slot(),
-                        &descriptor.endpoint_identity,
+                        &descriptor_for_chain.endpoint_identity,
                         &response,
                     );
                     if continued {
                         // Chain: schedule the next step.
                         start_helm_refresh_loop(
-                            pane_group,
                             descriptor_for_chain,
                             ctx,
                         );
@@ -395,7 +395,6 @@ pub fn start_helm_refresh_loop(
                                 "helm-warp: refresh HTTP failed for endpoint {endpoint_id}; retrying next cycle"
                             );
                             start_helm_refresh_loop(
-                                pane_group,
                                 descriptor_for_chain,
                                 ctx,
                             );

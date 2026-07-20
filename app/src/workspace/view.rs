@@ -4399,7 +4399,6 @@ impl Workspace {
                 pane_group.set_title(&title, ctx);
                 if let Some(descriptor) = refresh_descriptor {
                     crate::uri::helm_warp::start_helm_refresh_loop(
-                        pane_group,
                         descriptor,
                         ctx,
                     );
