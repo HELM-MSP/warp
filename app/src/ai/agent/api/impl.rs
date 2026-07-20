@@ -286,23 +286,29 @@ fn get_supported_cli_agent_tools(params: &RequestParams) -> Vec<api::ToolType> {
         api::ToolType::FileGlobV2,
     ];
 
-    if FeatureFlag::TransferControlTool.is_enabled() {
-        supported_cli_agent_tools.push(api::ToolType::TransferShellCommandControlToUser);
-    }
-
     match params.session_context.session_type() {
         None | Some(SessionType::Local) => {
             supported_cli_agent_tools
                 .extend(&[api::ToolType::ReadFiles, api::ToolType::SearchCodebase]);
+            // TransferShellCommandControlToUser is a local-shell fallback
+            // — only the local path may advertise it (paired with the
+            // WarpifiedRemote strip below).
+            if FeatureFlag::TransferControlTool.is_enabled() {
+                supported_cli_agent_tools.push(api::ToolType::TransferShellCommandControlToUser);
+            }
         }
         Some(SessionType::WarpifiedRemote { host_id: Some(_) }) => {
             // Same guard as `get_supported_tools`: local-fallback shell tools
             // are not routable to the endpoint.
+            // hw-o8h: also strip TransferShellCommandControlToUser — it
+            // hands control of a *local* shell process back to the user,
+            // which has no meaning on an endpoint-bound tab.
             supported_cli_agent_tools.retain(|tool| {
                 !matches!(
                     tool,
                     api::ToolType::WriteToLongRunningShellCommand
                         | api::ToolType::ReadShellCommandOutput
+                        | api::ToolType::TransferShellCommandControlToUser
                 )
             });
             supported_cli_agent_tools.push(api::ToolType::ReadFiles);
@@ -311,12 +317,14 @@ fn get_supported_cli_agent_tools(params: &RequestParams) -> Vec<api::ToolType> {
             }
         }
         Some(SessionType::WarpifiedRemote { host_id: None }) => {
-            // Downgrade: still strip local-fallback shell tools.
+            // Downgrade: still strip local-fallback shell tools
+            // (and TransferShellCommandControlToUser for the same reason).
             supported_cli_agent_tools.retain(|tool| {
                 !matches!(
                     tool,
                     api::ToolType::WriteToLongRunningShellCommand
                         | api::ToolType::ReadShellCommandOutput
+                        | api::ToolType::TransferShellCommandControlToUser
                 )
             });
         }

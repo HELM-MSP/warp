@@ -175,10 +175,26 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
                     ),
                 )
             }
-            // Local-fallback write to long-running shell refused on
-            // endpoint-bound tab.
-            WriteToLongRunningShellCommandResult::LocalFallbackRefused { .. } =>
-                Err(ConvertToAPITypeError::Ignore),
+            // hw-o8h: surface the refusal as a typed tool error rather than
+            // `ConvertToAPITypeError::Ignore`, which aborts the outbound
+            // request construction entirely and would hide the refusal
+            // from the server-side action loop. The proto's
+            // `ShellCommandError` only carries `command_not_found`, so we
+            // ride that variant on the wire and keep the rich
+            // `reason` string on the Rust side.
+            WriteToLongRunningShellCommandResult::LocalFallbackRefused { reason: _reason } => Ok(
+                api::request::input::tool_call_result::Result::WriteToLongRunningShellCommand(
+                    api::WriteToLongRunningShellCommandResult {
+                        result: Some(
+                            api::write_to_long_running_shell_command_result::Result::Error(
+                                api::ShellCommandError {
+                                    r#type: Some(api::shell_command_error::Type::CommandNotFound(())),
+                                },
+                            ),
+                        ),
+                    },
+                ),
+            ),
         }
     }
 }
@@ -747,6 +763,25 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                     ),
                 )
             }
+            // hw-o8h: surface the refusal as a typed tool error (mirrors
+            // the write/transfer variants). The proto's
+            // `ShellCommandError` only carries `command_not_found`, so
+            // the wire shape rides that variant; the rich `reason`
+            // remains on the Rust-side variant for redaction / logs.
+            ReadShellCommandOutputResult::LocalFallbackRefused { reason: _reason } => Ok(
+                api::request::input::tool_call_result::Result::ReadShellCommandOutput(
+                    api::ReadShellCommandOutputResult {
+                        command: String::new(),
+                        result: Some(
+                            api::read_shell_command_output_result::Result::Error(
+                                api::ShellCommandError {
+                                    r#type: Some(api::shell_command_error::Type::CommandNotFound(())),
+                                },
+                            ),
+                        ),
+                    },
+                ),
+            ),
             _ => Err(ConvertToAPITypeError::Ignore),
         }
     }
@@ -820,10 +855,22 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                     ),
                 )
             }
-            // Local-fallback transfer of shell control refused on
-            // endpoint-bound tab.
-            TransferShellCommandControlToUserResult::LocalFallbackRefused { .. } =>
-                Err(ConvertToAPITypeError::Ignore),
+            // hw-o8h: typed refusal (matches write/read). Same wire-shape
+            // note: the proto `ShellCommandError` only carries
+            // `command_not_found`, so the refusal rides that variant.
+            TransferShellCommandControlToUserResult::LocalFallbackRefused { reason: _reason } => Ok(
+                api::request::input::tool_call_result::Result::TransferShellCommandControlToUser(
+                    api::TransferShellCommandControlToUserResult {
+                        result: Some(
+                            api::transfer_shell_command_control_to_user_result::Result::Error(
+                                api::ShellCommandError {
+                                    r#type: Some(api::shell_command_error::Type::CommandNotFound(())),
+                                },
+                            ),
+                        ),
+                    },
+                ),
+            ),
         }
     }
 }

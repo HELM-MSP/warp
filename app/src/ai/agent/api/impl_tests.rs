@@ -209,6 +209,61 @@ fn local_supported_tools_include_shell_tools_by_default() {
     assert!(supported_cli_agent_tools.contains(&api::ToolType::ReadShellCommandOutput));
 }
 
+// hw-o8h: TransferShellCommandControlToUser is a *local* shell-control
+// handoff. It must never be advertised on remote / downgrade CLI tools,
+// even when the `TransferControlTool` feature flag is on (otherwise a
+// connected remote CLI subagent could be told to hand a local terminal
+// back to the user, which has no meaning on an endpoint-bound tab).
+#[test]
+fn remote_cli_tools_omit_transfer_control_when_connected() {
+    let _flag = FeatureFlag::TransferControlTool.override_enabled(true);
+    let params = request_params_for_remote(Some(HostId::new("host".to_string())));
+    let supported_cli_agent_tools = get_supported_cli_agent_tools(&params);
+
+    assert!(
+        !supported_cli_agent_tools.contains(&api::ToolType::TransferShellCommandControlToUser),
+        "TransferShellCommandControlToUser must be stripped for connected remote tabs"
+    );
+}
+
+#[test]
+fn remote_cli_tools_omit_transfer_control_when_downgrade() {
+    let _flag = FeatureFlag::TransferControlTool.override_enabled(true);
+    let params = request_params_for_remote(None);
+    let supported_cli_agent_tools = get_supported_cli_agent_tools(&params);
+
+    assert!(
+        !supported_cli_agent_tools.contains(&api::ToolType::TransferShellCommandControlToUser),
+        "TransferShellCommandControlToUser must be stripped even in downgrade state"
+    );
+}
+
+#[test]
+fn local_cli_tools_include_transfer_control_when_flag_is_enabled() {
+    let _flag = FeatureFlag::TransferControlTool.override_enabled(true);
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.session_context = SessionContext::new_for_test();
+    let supported_cli_agent_tools = get_supported_cli_agent_tools(&params);
+
+    assert!(
+        supported_cli_agent_tools.contains(&api::ToolType::TransferShellCommandControlToUser),
+        "local tabs may advertise TransferShellCommandControlToUser when the flag is on"
+    );
+}
+
+#[test]
+fn local_cli_tools_omit_transfer_control_when_flag_is_disabled() {
+    let _flag = FeatureFlag::TransferControlTool.override_enabled(false);
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.session_context = SessionContext::new_for_test();
+    let supported_cli_agent_tools = get_supported_cli_agent_tools(&params);
+
+    assert!(
+        !supported_cli_agent_tools.contains(&api::ToolType::TransferShellCommandControlToUser),
+        "local tabs must not advertise TransferShellCommandControlToUser when the flag is off"
+    );
+}
+
 #[test]
 fn remote_session_context_is_remote_is_true() {
     let params =
