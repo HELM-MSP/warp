@@ -128,10 +128,7 @@ impl ActiveSession {
     /// telemetry (macOS/zsh/hostname) into the remote request. Remote-bound
     /// conversations discover the endpoint via the launch-config JWT instead.
     pub fn ai_execution_environment(&self, app: &AppContext) -> Option<WarpAiExecutionContext> {
-        if matches!(
-            self.session_type(app),
-            Some(SessionType::WarpifiedRemote { .. })
-        ) {
+        if matches!(self.session_type(app), Some(SessionType::WarpifiedRemote { .. })) {
             return None;
         }
         self.session(app).as_ref().map(WarpAiExecutionContext::new)

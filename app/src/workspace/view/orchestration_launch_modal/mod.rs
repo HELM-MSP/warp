@@ -1,3 +1,3 @@
 mod view;
 
-pub use view::{OrchestrationLaunchModal, OrchestrationLaunchModalEvent, init};
+pub use view::{init, OrchestrationLaunchModal, OrchestrationLaunchModalEvent};

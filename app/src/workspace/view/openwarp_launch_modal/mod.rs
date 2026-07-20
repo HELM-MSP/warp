@@ -1,3 +1,3 @@
 mod view;
 
-pub use view::{OpenWarpLaunchModal, OpenWarpLaunchModalEvent, init};
+pub use view::{init, OpenWarpLaunchModal, OpenWarpLaunchModalEvent};

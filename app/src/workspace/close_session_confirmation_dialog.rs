@@ -1,7 +1,6 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
 use warpui::{
-    AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
     elements::{
         Align, ChildAnchor, Container, MouseStateHandle, OffsetPositioning, ParentAnchor,
         ParentOffsetBounds, Stack,
@@ -13,12 +12,13 @@ use warpui::{
         components::{Coords, UiComponent, UiComponentStyles},
         text::Span,
     },
+    AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
 use crate::{
     appearance::Appearance,
     pane_group::PaneId,
-    ui_components::dialog::{Dialog, dialog_styles},
+    ui_components::dialog::{dialog_styles, Dialog},
     workspace::TabMovement,
 };
 

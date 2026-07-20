@@ -1,6 +1,5 @@
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::{Fill, phenomenon::PhenomenonStyle};
-use warpui::Element;
+use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     CacheOption, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
@@ -8,6 +7,7 @@ use warpui::elements::{
     ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::Element;
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;

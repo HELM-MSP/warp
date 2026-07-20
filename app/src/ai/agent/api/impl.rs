@@ -62,8 +62,8 @@ pub async fn generate_multi_agent_output(
     // session is `WarpifiedRemote`, OR the helm tab binding says this
     // tab is bound to a remote endpoint (the Mac shell underneath may
     // still be local — hw-o8h).
-    let is_remote_or_helm_bound =
-        params.session_context.is_remote() || params.session_context.is_helm_remote();
+    let is_remote_or_helm_bound = params.session_context.is_remote()
+        || params.session_context.is_helm_remote();
 
     let request = api::Request {
         task_context: Some(api::request::TaskContext {
@@ -147,7 +147,10 @@ pub async fn generate_multi_agent_output(
     };
 
     let response_stream = server_api
-        .generate_multi_agent_output(&request, params.session_context.helm_tab_binding())
+        .generate_multi_agent_output(
+            &request,
+            params.session_context.helm_tab_binding(),
+        )
         .await;
     match response_stream {
         Ok(stream) => {

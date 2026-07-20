@@ -295,10 +295,7 @@ impl HarnessAvailabilityModel {
         // and pop up an error. Short-circuit on these channels — Helm-Warp gets
         // its harnesses via helm_oz, not Warp's hosted backend.
         use warp_core::channel::Channel;
-        if matches!(
-            warp_core::channel::ChannelState::channel(),
-            Channel::Local | Channel::Oss | Channel::Integration
-        ) {
+        if matches!(warp_core::channel::ChannelState::channel(), Channel::Local | Channel::Oss | Channel::Integration) {
             return;
         }
 

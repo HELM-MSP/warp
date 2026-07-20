@@ -25,9 +25,7 @@ use crate::{
     SizeConstraint,
 };
 use itertools::Itertools;
-use markdown_parser::{
-    Action, FormattedText, FormattedTextFragment, FormattedTextLine, Hyperlink, SemanticColor,
-};
+use markdown_parser::{Action, FormattedText, FormattedTextFragment, FormattedTextLine, Hyperlink, SemanticColor};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use std::borrow::Cow;
@@ -296,7 +294,10 @@ impl FormattedTextElement {
     /// Helm-Warp: set the semantic-color palette used to resolve `[:success]`-style
     /// color spans. When unset (the default), color spans render as plain text
     /// (graceful degradation in stock contexts that don't supply a palette).
-    pub fn with_semantic_color_palette(mut self, palette: Arc<SemanticColorPalette>) -> Self {
+    pub fn with_semantic_color_palette(
+        mut self,
+        palette: Arc<SemanticColorPalette>,
+    ) -> Self {
         self.semantic_color_palette = Some(palette);
         self
     }

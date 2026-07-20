@@ -11,8 +11,8 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::Vector2F;
 use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::platform::Cursor;
 use warpui::platform::file_picker::{FilePickerConfiguration, FilePickerError};
+use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, Element, Entity, EventContext, SingletonEntity, TypedActionView, View, ViewContext,
@@ -20,19 +20,19 @@ use warpui::{
 };
 
 use pathfinder_color::ColorU;
-use warp_core::ui::theme::{Fill, phenomenon::PhenomenonStyle};
+use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
 
 use crate::appearance::Appearance;
 use crate::settings::AISettings;
-use crate::tab_configs::session_config::{SessionConfigSelection, SessionType, is_git_repo};
+use crate::tab_configs::session_config::{is_git_repo, SessionConfigSelection, SessionType};
 use crate::tab_configs::session_config_rendering;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource,
 };
 use crate::view_components::callout_bubble::{
-    CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig, callout_body_color,
-    callout_checkbox, callout_label_color, callout_title_color, render_callout_bubble,
+    callout_body_color, callout_checkbox, callout_label_color, callout_title_color,
+    render_callout_bubble, CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig,
 };
 use crate::workspace::tab_settings::TabSettings;
 

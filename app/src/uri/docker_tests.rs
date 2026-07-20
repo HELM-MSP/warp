@@ -1,7 +1,7 @@
 use warpui::App;
 
 use crate::{
-    auth::{AuthStateProvider, auth_manager::AuthManager},
+    auth::{auth_manager::AuthManager, AuthStateProvider},
     server::{
         server_api::ServerApiProvider, telemetry::context_provider::AppTelemetryContextProvider,
     },
