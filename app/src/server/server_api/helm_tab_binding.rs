@@ -363,8 +363,7 @@ mod tests {
 
     #[test]
     fn freeze_remote_lists_every_missing_field() {
-        let a: [Option<&str>; 6] = [None, None, None, None, None, None];
-        let err = freeze_remote_from_tuple(a).unwrap_err();
+        let err = freeze_remote(None, None, None, None, None, None).unwrap_err();
         assert_eq!(err.missing.len(), 6);
     }
 
@@ -529,7 +528,7 @@ mod tests {
             "http://b.helm:18080",
             "jwt-B",
         );
-        slot_a.freeze_remote_from_tuple(a).unwrap();
+        slot_a.freeze_remote(a).unwrap();
         slot_b.freeze_remote(b).unwrap();
 
         assert_eq!(slot_a.get().unwrap().endpoint_id, "ep-A");

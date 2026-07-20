@@ -1079,10 +1079,14 @@ pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
     // Firebase `refresh_token` on `warp://auth/desktop_redirect?...`). Log
     // only the non-sensitive components (scheme, host, path) on release
     // channels; dogfood builds retain the full URL for local debugging.
-    safe_info!(
-        safe: ("received url {}", safe_url_log_fields(url)),
-        full: ("received url {:?}", &url)
-    );
+    if helm_warp::is_helm_warp_url(url) {
+        log::info!("received helm-warp URL {}", safe_url_log_fields(url));
+    } else {
+        safe_info!(
+            safe: ("received url {}", safe_url_log_fields(url)),
+            full: ("received url {:?}", &url)
+        );
+    }
 
     // Pick the window that should be handling the URI.  This has some
     // additional logic to handle the hotkey window and there being no
