@@ -64,8 +64,17 @@ pub(super) fn input_context_for_request(
         current_time: Local::now(),
     });
 
-    if let Some(env) = active_session.ai_execution_environment(app) {
-        context.push(AIAgentContext::ExecutionEnvironment(env));
+    // Remote-bound tabs must never see local ExecutionEnvironment (macOS/zsh/hostname).
+    // `active_session.ai_execution_environment` already returns None for WarpifiedRemote;
+    // this explicit check is defense-in-depth for the build path.
+    let is_remote = matches!(
+        active_session.session_type(app),
+        Some(crate::terminal::model::session::SessionType::WarpifiedRemote { .. })
+    );
+    if !is_remote {
+        if let Some(env) = active_session.ai_execution_environment(app) {
+            context.push(AIAgentContext::ExecutionEnvironment(env));
+        }
     }
 
     if FeatureFlag::FullSourceCodeEmbedding.is_enabled()

@@ -18,7 +18,9 @@ mod preprocess;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange,
-    CancellationReason, CreateDocumentsResult, EditDocumentsResult, RequestCommandOutputResult,
+    CancellationReason, CreateDocumentsResult, EditDocumentsResult, ReadShellCommandOutputResult,
+    RequestCommandOutputResult, TransferShellCommandControlToUserResult,
+    WriteToLongRunningShellCommandResult,
 };
 use crate::ai::{
     agent::AIAgentInput,
@@ -247,6 +249,10 @@ pub struct BlocklistAIActionModel {
     /// Past actions and their corresponding statuses from previous AI exchanges.
     past_action_results: HashMap<AIAgentActionId, Arc<AIAgentActionResult>>,
 
+    /// Reference to the active session, used for endpoint-binding checks
+    /// (e.g., to refuse local shell execution on WarpifiedRemote tabs).
+    active_session: ModelHandle<ActiveSession>,
+
     /// The ID of the terminal view this controller is associated with.
     terminal_view_id: EntityId,
 
@@ -318,6 +324,7 @@ impl BlocklistAIActionModel {
             action_order: Default::default(),
             terminal_view_id,
             pending_preprocessed_actions: Default::default(),
+            active_session,
             is_view_only: false,
             ambient_agent_task_id: None,
         }
@@ -904,6 +911,34 @@ impl BlocklistAIActionModel {
 
         let action_id = action.id.clone();
         let phase = self.action_phase_for_action(&action, ctx);
+
+        // hw-c6z: endpoint-bound (WarpifiedRemote) sessions must never execute
+        // local-fallback shell tools. Even though `get_supported_tools`
+        // strips these from the request, an in-flight conversation or an
+        // older server response could still hand us a tool call for one —
+        // surface a typed `LocalFallbackRefused` result so the agent sees a
+        // proper refusal, not a host-side execution.
+        let app: &warpui::AppContext = ctx;
+        if let Some(typed_result) = self.typed_remote_fallback_refusal(&action.action, app) {
+            let executor = &self.executor;
+            executor.update(ctx, |_, ctx| {
+                ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
+                    action_id: action_id.clone(),
+                });
+                ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
+                    result: Arc::new(AIAgentActionResult {
+                        id: action_id.clone(),
+                        task_id: action.task_id.clone(),
+                        result: typed_result,
+                    }),
+                    conversation_id,
+                    cancellation_reason: None,
+                });
+            });
+            self.update_conversation_in_progress_status(conversation_id, ctx);
+            return Some(StartedAction::Sync);
+        }
+
         let execute_result = self.executor.update(ctx, |executor, ctx| {
             executor.try_to_execute_action(action, conversation_id, is_user_initiated, ctx)
         });
@@ -1453,3 +1488,49 @@ impl Entity for BlocklistAIActionModel {
 #[cfg(test)]
 #[path = "action_model_tests.rs"]
 mod tests;
+
+impl BlocklistAIActionModel {
+    /// Build a typed `LocalFallbackRefused` result for the four shell-related
+    /// action types when the active session is endpoint-bound. Returns
+    /// `None` for any other action type (or for a local/None session) —
+    /// caller falls through to the normal execution path.
+    fn typed_remote_fallback_refusal(
+        &self,
+        action: &AIAgentActionType,
+        app: &warpui::AppContext,
+    ) -> Option<AIAgentActionResultType> {
+        use crate::terminal::model::session::SessionType;
+        let is_remote =
+            matches!(self.active_session.as_ref(app).session_type(app), Some(SessionType::WarpifiedRemote { .. }));
+        if !is_remote {
+            return None;
+        }
+        let reason = String::from(
+            "session is bound to a remote endpoint; local shell execution is not available",
+        );
+        Some(match action {
+            AIAgentActionType::RequestCommandOutput { .. } => {
+                AIAgentActionResultType::RequestCommandOutput(
+                    RequestCommandOutputResult::LocalFallbackRefused { reason },
+                )
+            }
+            AIAgentActionType::WriteToLongRunningShellCommand { .. } => {
+                AIAgentActionResultType::WriteToLongRunningShellCommand(
+                    WriteToLongRunningShellCommandResult::LocalFallbackRefused { reason },
+                )
+            }
+            AIAgentActionType::ReadShellCommandOutput { .. } => {
+                AIAgentActionResultType::ReadShellCommandOutput(
+                    ReadShellCommandOutputResult::LocalFallbackRefused { reason },
+                )
+            }
+            AIAgentActionType::TransferShellCommandControlToUser { .. } => {
+                AIAgentActionResultType::TransferShellCommandControlToUser(
+                    TransferShellCommandControlToUserResult::LocalFallbackRefused { reason },
+                )
+            }
+            // Not a local-fallback shell action — let the caller route it.
+            _ => return None,
+        })
+    }
+}

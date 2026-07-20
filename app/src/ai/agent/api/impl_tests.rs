@@ -163,3 +163,99 @@ fn remote_supported_tools_omit_search_codebase_when_remote_is_not_connected() {
     assert!(!supported_tools.contains(&api::ToolType::SearchCodebase));
     assert!(!supported_cli_agent_tools.contains(&api::ToolType::SearchCodebase));
 }
+
+// hw-c6z: endpoint-bound tabs must strip local-fallback shell tools so the
+// model never asks to run them locally.
+#[test]
+fn remote_supported_tools_omit_local_shell_tools_when_connected() {
+    let params = request_params_for_remote(Some(HostId::new("host".to_string())));
+    let supported_tools = get_supported_tools(&params);
+    let supported_cli_agent_tools = get_supported_cli_agent_tools(&params);
+
+    assert!(!supported_tools.contains(&api::ToolType::RunShellCommand));
+    assert!(!supported_tools.contains(&api::ToolType::WriteToLongRunningShellCommand));
+    assert!(!supported_tools.contains(&api::ToolType::ReadShellCommandOutput));
+    assert!(!supported_cli_agent_tools.contains(&api::ToolType::WriteToLongRunningShellCommand));
+    assert!(!supported_cli_agent_tools.contains(&api::ToolType::ReadShellCommandOutput));
+}
+
+#[test]
+fn remote_supported_tools_omit_local_shell_tools_when_not_connected_downgrade() {
+    // Downgrade: even if the host_id hasn't been set yet (user opened a
+    // remote-style tab without a successful handshake), shell tools stay out
+    // so a confused state never falls through to a local execution.
+    let params = request_params_for_remote(None);
+    let supported_tools = get_supported_tools(&params);
+    let supported_cli_agent_tools = get_supported_cli_agent_tools(&params);
+
+    assert!(!supported_tools.contains(&api::ToolType::RunShellCommand));
+    assert!(!supported_tools.contains(&api::ToolType::WriteToLongRunningShellCommand));
+    assert!(!supported_tools.contains(&api::ToolType::ReadShellCommandOutput));
+    assert!(!supported_cli_agent_tools.contains(&api::ToolType::WriteToLongRunningShellCommand));
+    assert!(!supported_cli_agent_tools.contains(&api::ToolType::ReadShellCommandOutput));
+}
+
+#[test]
+fn local_supported_tools_include_shell_tools_by_default() {
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.session_context = SessionContext::new_for_test();
+    let supported_tools = get_supported_tools(&params);
+    let supported_cli_agent_tools = get_supported_cli_agent_tools(&params);
+
+    assert!(supported_tools.contains(&api::ToolType::RunShellCommand));
+    assert!(supported_tools.contains(&api::ToolType::WriteToLongRunningShellCommand));
+    assert!(supported_tools.contains(&api::ToolType::ReadShellCommandOutput));
+    assert!(supported_cli_agent_tools.contains(&api::ToolType::WriteToLongRunningShellCommand));
+    assert!(supported_cli_agent_tools.contains(&api::ToolType::ReadShellCommandOutput));
+}
+
+#[test]
+fn remote_session_context_is_remote_is_true() {
+    let params =
+        request_params_for_remote(Some(HostId::new("endpoint-A".to_string())));
+    assert!(params.session_context.is_remote());
+
+    let params2 = request_params_for_remote(None);
+    assert!(params2.session_context.is_remote());
+
+    let params3 = request_params_with_ask_user_question_enabled(false);
+    assert!(!params3.session_context.is_remote());
+}
+
+// hw-c6z: two simultaneous endpoints must stay isolated. Each request's
+// session_context is the binding carrier — verify they don't share it.
+#[test]
+fn two_simultaneous_endpoints_have_independent_session_contexts() {
+    let params_a =
+        request_params_for_remote(Some(HostId::new("endpoint-A".to_string())));
+    let params_b =
+        request_params_for_remote(Some(HostId::new("endpoint-B".to_string())));
+
+    assert_ne!(
+        params_a.session_context.session_type(),
+        params_b.session_context.session_type(),
+        "two remote tabs bind to distinct endpoints"
+    );
+    assert_eq!(
+        params_a
+            .session_context
+            .session_type()
+            .as_ref()
+            .and_then(|st| match st {
+                SessionType::WarpifiedRemote { host_id } => host_id.as_ref().map(|h| h.to_string()),
+                _ => None,
+            }),
+        Some(HostId::new("endpoint-A".to_string()).to_string())
+    );
+    assert_eq!(
+        params_b
+            .session_context
+            .session_type()
+            .as_ref()
+            .and_then(|st| match st {
+                SessionType::WarpifiedRemote { host_id } => host_id.as_ref().map(|h| h.to_string()),
+                _ => None,
+            }),
+        Some(HostId::new("endpoint-B".to_string()).to_string())
+    );
+}

@@ -1015,6 +1015,9 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                         "\nCommand ({command}) was on denylist and so was not allowed to run"
                     )
                 }
+                RequestCommandOutputResult::LocalFallbackRefused { reason } => {
+                    write!(f, "\n_Local shell execution refused: {reason}_")
+                }
             },
             AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                 WriteToLongRunningShellCommandResult::CommandFinished { output, .. } => {
@@ -1028,6 +1031,9 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                 }
                 WriteToLongRunningShellCommandResult::Error(e) => {
                     write!(f, "\n_Write to command failed: {e:?}")
+                }
+                WriteToLongRunningShellCommandResult::LocalFallbackRefused { reason } => {
+                    write!(f, "\n_Local shell write refused: {reason}_")
                 }
             },
             AIAgentActionResultType::RequestFileEdits(result) => match result {
@@ -1194,6 +1200,9 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                 }
                 ReadShellCommandOutputResult::Error(e) => {
                     write!(f, "\n_Read shell command output failed: {e:?}_")
+                }
+                ReadShellCommandOutputResult::LocalFallbackRefused { reason } => {
+                    write!(f, "\n_Local shell read refused: {reason}_")
                 }
             },
             other => {

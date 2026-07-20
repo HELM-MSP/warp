@@ -121,7 +121,16 @@ impl ActiveSession {
     }
 
     /// Returns the `WarpAiExecutionContext` for the active session.
+    ///
+    /// Returns `None` for `WarpifiedRemote` sessions: the local shell/OS/host
+    /// info does not describe the endpoint the agent must execute against, so
+    /// emitting it as `AIAgentContext::ExecutionEnvironment` would leak local
+    /// telemetry (macOS/zsh/hostname) into the remote request. Remote-bound
+    /// conversations discover the endpoint via the launch-config JWT instead.
     pub fn ai_execution_environment(&self, app: &AppContext) -> Option<WarpAiExecutionContext> {
+        if matches!(self.session_type(app), Some(SessionType::WarpifiedRemote { .. })) {
+            return None;
+        }
         self.session(app).as_ref().map(WarpAiExecutionContext::new)
     }
 }

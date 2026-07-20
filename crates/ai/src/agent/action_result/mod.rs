@@ -196,6 +196,10 @@ pub enum RequestCommandOutputResult {
     CancelledBeforeExecution,
     /// The command was denied because it was present on the denylist.
     Denylisted { command: String },
+    /// The session is endpoint-bound (Helm-Warp remote); local-shell
+    /// execution is unsafe. Surfaced as a typed failure so the UI can
+    /// render it without falling through to a local fallback.
+    LocalFallbackRefused { reason: String },
 }
 
 impl RequestCommandOutputResult {
@@ -203,14 +207,16 @@ impl RequestCommandOutputResult {
         match self {
             Self::Completed { exit_code, .. } => exit_code.was_successful(),
             Self::LongRunningCommandSnapshot { .. } => true,
-            Self::CancelledBeforeExecution | Self::Denylisted { .. } => false,
+            Self::CancelledBeforeExecution
+            | Self::Denylisted { .. }
+            | Self::LocalFallbackRefused { .. } => false,
         }
     }
 
     pub fn failed(&self) -> bool {
         match self {
             Self::Completed { exit_code, .. } => !exit_code.was_successful(),
-            Self::Denylisted { .. } => true,
+            Self::Denylisted { .. } | Self::LocalFallbackRefused { .. } => true,
             Self::CancelledBeforeExecution | Self::LongRunningCommandSnapshot { .. } => false,
         }
     }
@@ -242,6 +248,9 @@ impl Display for RequestCommandOutputResult {
             RequestCommandOutputResult::Denylisted { .. } => {
                 write!(f, "Command output was on denylist")
             }
+            RequestCommandOutputResult::LocalFallbackRefused { reason } => {
+                write!(f, "Local shell execution refused: {reason}")
+            }
         }
     }
 }
@@ -269,6 +278,8 @@ pub enum WriteToLongRunningShellCommandResult {
     },
     Cancelled,
     Error(ShellCommandError),
+    /// Endpoint-bound session refuses local long-running shell writes.
+    LocalFallbackRefused { reason: String },
 }
 
 impl Display for WriteToLongRunningShellCommandResult {
@@ -286,6 +297,9 @@ impl Display for WriteToLongRunningShellCommandResult {
             ),
             Self::Cancelled => write!(f, "Writing to long-running shell command cancelled"),
             Self::Error(e) => write!(f, "Write to long-running shell command failed: {e:?}"),
+            Self::LocalFallbackRefused { reason } => {
+                write!(f, "Local shell write refused: {reason}")
+            }
         }
     }
 }
@@ -568,6 +582,8 @@ pub enum ReadShellCommandOutputResult {
     },
     Cancelled,
     Error(ShellCommandError),
+    /// Endpoint-bound session refuses reading local long-running shell output.
+    LocalFallbackRefused { reason: String },
 }
 
 impl Display for ReadShellCommandOutputResult {
@@ -590,6 +606,9 @@ impl Display for ReadShellCommandOutputResult {
             }
             ReadShellCommandOutputResult::Error(e) => {
                 write!(f, "Read shell command output failed: {e:?}")
+            }
+            ReadShellCommandOutputResult::LocalFallbackRefused { reason } => {
+                write!(f, "Local shell read refused: {reason}")
             }
         }
     }
@@ -1363,6 +1382,8 @@ pub enum TransferShellCommandControlToUserResult {
     },
     Cancelled,
     Error(ShellCommandError),
+    /// Endpoint-bound session refuses transferring local shell control.
+    LocalFallbackRefused { reason: String },
 }
 
 impl Display for TransferShellCommandControlToUserResult {
@@ -1380,6 +1401,9 @@ impl Display for TransferShellCommandControlToUserResult {
             ),
             Self::Cancelled => write!(f, "Transfer shell command control to user cancelled"),
             Self::Error(e) => write!(f, "Transfer shell command control to user failed: {e:?}"),
+            Self::LocalFallbackRefused { reason } => {
+                write!(f, "Local shell transfer refused: {reason}")
+            }
         }
     }
 }

@@ -121,7 +121,7 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                         match result {
                             Snapshot { grid_contents, .. } => redact_secrets(grid_contents),
                             CommandFinished { output, .. } => redact_secrets(output),
-                            Error(_) | Cancelled => {}
+                            Error(_) | Cancelled | LocalFallbackRefused { .. } => {}
                         }
                     }
                     AIAgentActionResultType::ReadShellCommandOutput(result) => {
@@ -131,7 +131,7 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                             LongRunningCommandSnapshot { grid_contents, .. } => {
                                 redact_secrets(grid_contents)
                             }
-                            Error(_) | Cancelled => {}
+                            Error(_) | Cancelled | LocalFallbackRefused { .. } => {}
                         }
                     }
                     AIAgentActionResultType::ReadFiles(read_files_result) => {
@@ -256,7 +256,10 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                                 ..
                             } => redact_secrets(output),
                             TransferShellCommandControlToUserResult::Error(_)
-                            | TransferShellCommandControlToUserResult::Cancelled => {}
+                            | TransferShellCommandControlToUserResult::Cancelled
+                            | TransferShellCommandControlToUserResult::LocalFallbackRefused {
+                                ..
+                            } => {}
                         }
                     }
                     AIAgentActionResultType::AskUserQuestion(result) => {

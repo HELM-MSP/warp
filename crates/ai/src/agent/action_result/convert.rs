@@ -97,6 +97,27 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                     ),
                 )
             }
+            // Local-fallback shell execution refused on endpoint-bound tab.
+            // Surface on the wire as a PermissionDenied so the server-side
+            // action loop sees a normal typed refusal and can re-route the
+            // request through the endpoint.
+            RequestCommandOutputResult::LocalFallbackRefused { .. } => Ok(
+                api::request::input::tool_call_result::Result::RunShellCommand(
+                    #[allow(deprecated)]
+                    api::RunShellCommandResult {
+                        command: String::new(),
+                        output: Default::default(),
+                        exit_code: Default::default(),
+                        result: Some(api::run_shell_command_result::Result::PermissionDenied(
+                            api::PermissionDenied {
+                                reason: Some(
+                                    api::permission_denied::Reason::DenylistedCommand(()),
+                                ),
+                            },
+                        )),
+                    },
+                ),
+            ),
         }
     }
 }
@@ -154,6 +175,10 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
                     ),
                 )
             }
+            // Local-fallback write to long-running shell refused on
+            // endpoint-bound tab.
+            WriteToLongRunningShellCommandResult::LocalFallbackRefused { .. } =>
+                Err(ConvertToAPITypeError::Ignore),
         }
     }
 }
@@ -795,6 +820,10 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                     ),
                 )
             }
+            // Local-fallback transfer of shell control refused on
+            // endpoint-bound tab.
+            TransferShellCommandControlToUserResult::LocalFallbackRefused { .. } =>
+                Err(ConvertToAPITypeError::Ignore),
         }
     }
 }

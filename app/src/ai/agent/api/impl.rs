@@ -56,11 +56,15 @@ pub async fn generate_multi_agent_output(
         params.allow_use_of_warp_credits,
     );
 
+    // Remote-bound requests must not bleed local context (shell/os) into the
+    // wire payload; the conversation is endpoint-bound, not host-bound.
+    let is_remote = params.session_context.is_remote();
+
     let request = api::Request {
         task_context: Some(api::request::TaskContext {
             tasks: params.tasks,
         }),
-        input: Some(convert_input(params.input)?),
+        input: Some(convert_input(params.input, is_remote)?),
         settings: Some(api::request::Settings {
             model_config: Some(api::request::settings::ModelConfig {
                 base: params.model.into(),
@@ -204,17 +208,37 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
             }
         }
         Some(SessionType::WarpifiedRemote { host_id: Some(_) }) => {
-            // Remote session with a known host — enable tools that route
-            // through RemoteServerClient. The host_id is only populated
-            // after a successful connection handshake, so its presence is a
-            // sufficient proxy for client availability.
+            // Remote-bound tabs must advertise only endpoint-routable tools.
+            // RunShellCommand / WriteToLongRunningShellCommand / ReadShellCommandOutput
+            // are local-shell fallbacks — never execute on the user's host. They
+            // are stripped at request construction so the model never asks for
+            // them; the executor also rejects any straggler tool call below.
+            supported_tools.retain(|tool| {
+                !matches!(
+                    tool,
+                    api::ToolType::RunShellCommand
+                        | api::ToolType::WriteToLongRunningShellCommand
+                        | api::ToolType::ReadShellCommandOutput
+                )
+            });
+
             supported_tools.extend(&[api::ToolType::ReadFiles, api::ToolType::ApplyFileDiffs]);
             if FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
                 supported_tools.push(api::ToolType::SearchCodebase);
             }
         }
         Some(SessionType::WarpifiedRemote { host_id: None }) => {
-            // Feature flag off or not yet connected — no remote tools.
+            // Feature flag off or not yet connected — no remote tools. Even so,
+            // strip local fallback shell tools so a downgrade never executes
+            // them on the user's host.
+            supported_tools.retain(|tool| {
+                !matches!(
+                    tool,
+                    api::ToolType::RunShellCommand
+                        | api::ToolType::WriteToLongRunningShellCommand
+                        | api::ToolType::ReadShellCommandOutput
+                )
+            });
         }
     }
 
@@ -272,12 +296,30 @@ fn get_supported_cli_agent_tools(params: &RequestParams) -> Vec<api::ToolType> {
                 .extend(&[api::ToolType::ReadFiles, api::ToolType::SearchCodebase]);
         }
         Some(SessionType::WarpifiedRemote { host_id: Some(_) }) => {
+            // Same guard as `get_supported_tools`: local-fallback shell tools
+            // are not routable to the endpoint.
+            supported_cli_agent_tools.retain(|tool| {
+                !matches!(
+                    tool,
+                    api::ToolType::WriteToLongRunningShellCommand
+                        | api::ToolType::ReadShellCommandOutput
+                )
+            });
             supported_cli_agent_tools.push(api::ToolType::ReadFiles);
             if FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
                 supported_cli_agent_tools.push(api::ToolType::SearchCodebase);
             }
         }
-        Some(SessionType::WarpifiedRemote { host_id: None }) => {}
+        Some(SessionType::WarpifiedRemote { host_id: None }) => {
+            // Downgrade: still strip local-fallback shell tools.
+            supported_cli_agent_tools.retain(|tool| {
+                !matches!(
+                    tool,
+                    api::ToolType::WriteToLongRunningShellCommand
+                        | api::ToolType::ReadShellCommandOutput
+                )
+            });
+        }
     }
 
     supported_cli_agent_tools

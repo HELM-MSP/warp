@@ -70,6 +70,9 @@ pub mod text {
                             "Command was not allowed to run due to presence on denylist"
                         )
                     }
+                    RequestCommandOutputResult::LocalFallbackRefused { reason } => {
+                        writeln!(w, "Local shell execution refused: {reason}")
+                    }
                 },
                 AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                     WriteToLongRunningShellCommandResult::Snapshot { .. } => {
@@ -85,6 +88,9 @@ pub mod text {
                     }
                     WriteToLongRunningShellCommandResult::Error(_) => {
                         writeln!(w, "Failed to write to command.")
+                    }
+                    WriteToLongRunningShellCommandResult::LocalFallbackRefused { reason } => {
+                        writeln!(w, "Local shell write refused: {reason}")
                     }
                 },
                 AIAgentActionResultType::RequestFileEdits(result) => match result {
@@ -831,6 +837,13 @@ pub mod json {
                             "Command was not allowed to run due to presence on denylist",
                         ),
                     }),
+                    RequestCommandOutputResult::LocalFallbackRefused { reason } => {
+                        Some(JsonMessage::ToolError {
+                            error: Cow::Owned(format!(
+                                "Local shell execution refused: {reason}"
+                            )),
+                        })
+                    }
                 },
                 AIAgentActionResultType::WriteToLongRunningShellCommand(result) => match result {
                     WriteToLongRunningShellCommandResult::Snapshot { .. } => {
@@ -855,6 +868,13 @@ pub mod json {
                     }
                     WriteToLongRunningShellCommandResult::Cancelled => {
                         Some(JsonMessage::ToolCanceled)
+                    }
+                    WriteToLongRunningShellCommandResult::LocalFallbackRefused { reason } => {
+                        Some(JsonMessage::ToolError {
+                            error: Cow::Owned(format!(
+                                "Local shell write refused: {reason}"
+                            )),
+                        })
                     }
                 },
                 AIAgentActionResultType::RequestFileEdits(result) => match result {

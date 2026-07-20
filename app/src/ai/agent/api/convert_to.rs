@@ -60,6 +60,7 @@ impl TryFrom<StaticQueryType> for api::request::input::query_with_canned_respons
 
 pub(super) fn convert_input(
     mut inputs: Vec<AIAgentInput>,
+    is_remote: bool,
 ) -> Result<api::request::Input, ConvertToAPITypeError> {
     if inputs.is_empty() {
         return Err(anyhow!("Attempted to send multi-agent request with no input").into());
@@ -68,7 +69,7 @@ pub(super) fn convert_input(
         .iter()
         .rev()
         .find_map(AIAgentInput::context)
-        .map(convert_context);
+        .map(|ctx| convert_context(ctx, is_remote));
 
     let mut api_inputs = vec![];
     if inputs.len() == 1 {
@@ -80,7 +81,7 @@ pub(super) fn convert_input(
                 ..
             } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::QueryWithCannedResponse(
                         api::request::input::QueryWithCannedResponse {
                             query,
@@ -91,7 +92,7 @@ pub(super) fn convert_input(
             }
             AIAgentInput::AutoCodeDiffQuery { query, context } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::AutoCodeDiffQuery(
                         api::request::input::AutoCodeDiffQuery { query },
                     )),
@@ -99,7 +100,7 @@ pub(super) fn convert_input(
             }
             AIAgentInput::ResumeConversation { context } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::ResumeConversation(
                         api::request::input::ResumeConversation {},
                     )),
@@ -107,7 +108,7 @@ pub(super) fn convert_input(
             }
             AIAgentInput::InitProjectRules { context, .. } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::InitProjectRules(
                         api::request::input::InitProjectRules {},
                     )),
@@ -119,7 +120,7 @@ pub(super) fn convert_input(
                 ..
             } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::CreateEnvironment(
                         api::request::input::CreateEnvironment { repo_paths },
                     )),
@@ -131,7 +132,7 @@ pub(super) fn convert_input(
                 trigger,
             } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::GeneratePassiveSuggestions(
                         api::request::input::GeneratePassiveSuggestions {
                             attachments: attachments
@@ -145,7 +146,7 @@ pub(super) fn convert_input(
             }
             AIAgentInput::CreateNewProject { query, context } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::CreateNewProject(
                         api::request::input::CreateNewProject { query },
                     )),
@@ -157,7 +158,7 @@ pub(super) fn convert_input(
                 ..
             } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::CloneRepository(
                         api::request::input::CloneRepository {
                             url: clone_repo_url.into_url(),
@@ -170,7 +171,7 @@ pub(super) fn convert_input(
                 review_comments,
             } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::CodeReview(
                         api::request::input::CodeReview {
                             operation: Some(
@@ -203,7 +204,7 @@ pub(super) fn convert_input(
             }
             AIAgentInput::FetchReviewComments { repo_path, context } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::FetchReviewComments(
                         api::request::input::FetchReviewComments { repo_path },
                     )),
@@ -211,7 +212,7 @@ pub(super) fn convert_input(
             }
             AIAgentInput::SummarizeConversation { prompt, context } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::SummarizeConversation(
                         api::request::input::SummarizeConversation {
                             prompt: prompt.unwrap_or_default(),
@@ -225,7 +226,7 @@ pub(super) fn convert_input(
                 user_query,
             } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::InvokeSkill(
                         api::request::input::InvokeSkill {
                             skill: Some(skill.into()),
@@ -252,7 +253,7 @@ pub(super) fn convert_input(
                 attachments_dir,
             } => {
                 return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
+                    context: Some(convert_context(context.as_ref(), is_remote)),
                     r#type: Some(api::request::input::Type::StartFromAmbientRunPrompt(
                         api::request::input::StartFromAmbientRunPrompt {
                             ambient_run_id,
@@ -720,7 +721,7 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
     }
 }
 
-fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
+fn convert_context(context: &[AIAgentContext], is_remote: bool) -> api::InputContext {
     let mut api_context = api::InputContext::default();
     for context in context.iter().cloned() {
         match context {
@@ -745,6 +746,13 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                     .push(api::input_context::SelectedText { text });
             }
             AIAgentContext::ExecutionEnvironment(execution_ctx) => {
+                // Remote-bound requests must never carry local shell/OS info
+                // (macOS/zsh/hostname); the endpoint identity comes from the
+                // launch-config JWT. Skip the entire ExecutionEnvironment
+                // branch — both api_context.shell and api_context.operating_system.
+                if is_remote {
+                    continue;
+                }
                 api_context.shell = Some(api::input_context::Shell {
                     name: execution_ctx.shell_name,
                     version: execution_ctx.shell_version.unwrap_or_default(),

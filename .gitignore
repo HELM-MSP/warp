@@ -69,3 +69,9 @@ __pycache__/
 .note/
 sweep.timestamp
 docs/
+
+# Rig-level state deployed per worktree (see /home/rfidel/gt/warp/.gitignore).
+.beads/
+.claude/
+.runtime/
+CLAUDE.md
