@@ -118,6 +118,25 @@ pub fn launch_target() -> Option<LaunchTarget> {
     })
 }
 
+/// Env-only helm_oz resolver for local/dev routing. Reads `HELM_OZ_URL` and
+/// `HELM_OZ_BEARER`; **never** consults `launch.json`. Used for the
+/// local/unbound tab path in `generate_multi_agent_output` so a local
+/// tab does not get hijacked into a remote endpoint after any prior
+/// launch (hw-o8h).
+///
+/// Local tabs MUST ignore `~/.config/helm/launch.json` — that file is
+/// only meaningful for remote-bound tabs whose binding has been frozen
+/// at open time. Reading it per-request for an unbound tab is exactly
+/// the cross-talk the per-tab binding closes.
+pub fn env_only_local_target() -> Option<LaunchTarget> {
+    let url = non_blank(std::env::var(HELM_OZ_URL_ENV).ok().as_deref())?.to_string();
+    Some(LaunchTarget {
+        helm_oz_url: url,
+        agent_token: non_blank(std::env::var(HELM_OZ_BEARER_ENV).ok().as_deref())
+            .map(str::to_string),
+    })
+}
+
 /// Treat `None` or a blank string as absent. Works for both `Option<&str>`
 /// (env `as_deref()`) and the config's `Option<String>`.
 fn non_blank(s: Option<&str>) -> Option<&str> {
@@ -253,5 +272,50 @@ mod tests {
         assert!(target.agent_token.is_none(), "no bearer → local mode target");
         std::env::remove_var(HELM_LAUNCH_CONFIG_ENV);
         std::env::remove_var(HELM_OZ_URL_ENV);
+    }
+
+    // hw-o8h: env_only_local_target must NEVER read launch.json.
+    // The local-tab routing path uses this to avoid cross-talk from a
+    // prior remote launch.
+    #[test]
+    fn env_only_local_target_ignores_launch_json() {
+        let _g = env_lock().lock().unwrap();
+        // Set up a launch.json that would hijack `launch_target()`.
+        std::env::set_var("HOME", "/tmp/helm-env-only-test");
+        std::env::remove_var(HELM_LAUNCH_CONFIG_ENV);
+        let dir = std::path::Path::new("/tmp/helm-env-only-test/.config/helm");
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("launch.json"),
+            r#"{"helm_oz_url":"http://from-file","agent_token":"file-bearer"}"#,
+        )
+        .unwrap();
+        // Set env to a different URL.
+        std::env::set_var(HELM_OZ_URL_ENV, "http://from-env");
+        std::env::set_var(HELM_OZ_BEARER_ENV, "env-bearer");
+        let target =
+            env_only_local_target().expect("env URL set → Some");
+        assert_eq!(
+            target.helm_oz_url, "http://from-env",
+            "env_only_local_target must NOT read launch.json"
+        );
+        assert_eq!(target.agent_token.as_deref(), Some("env-bearer"));
+        std::fs::remove_dir_all("/tmp/helm-env-only-test").ok();
+        std::env::remove_var("HOME");
+        std::env::remove_var(HELM_OZ_URL_ENV);
+        std::env::remove_var(HELM_OZ_BEARER_ENV);
+    }
+
+    #[test]
+    fn env_only_local_target_returns_none_without_env() {
+        let _g = env_lock().lock().unwrap();
+        std::env::set_var(HELM_LAUNCH_CONFIG_ENV, "/tmp/no-such-launch.json");
+        std::env::remove_var(HELM_OZ_URL_ENV);
+        std::env::remove_var(HELM_OZ_BEARER_ENV);
+        assert!(
+            env_only_local_target().is_none(),
+            "no env URL → None (launch.json MUST NOT be consulted)"
+        );
+        std::env::remove_var(HELM_LAUNCH_CONFIG_ENV);
     }
 }

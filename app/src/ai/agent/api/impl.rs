@@ -58,13 +58,18 @@ pub async fn generate_multi_agent_output(
 
     // Remote-bound requests must not bleed local context (shell/os) into the
     // wire payload; the conversation is endpoint-bound, not host-bound.
-    let is_remote = params.session_context.is_remote();
+    // `is_remote_or_helm_bound` covers both cases: the Mac terminal
+    // session is `WarpifiedRemote`, OR the helm tab binding says this
+    // tab is bound to a remote endpoint (the Mac shell underneath may
+    // still be local — hw-o8h).
+    let is_remote_or_helm_bound = params.session_context.is_remote()
+        || params.session_context.is_helm_remote();
 
     let request = api::Request {
         task_context: Some(api::request::TaskContext {
             tasks: params.tasks,
         }),
-        input: Some(convert_input(params.input, is_remote)?),
+        input: Some(convert_input(params.input, is_remote_or_helm_bound)?),
         settings: Some(api::request::Settings {
             model_config: Some(api::request::settings::ModelConfig {
                 base: params.model.into(),
@@ -141,7 +146,12 @@ pub async fn generate_multi_agent_output(
         mcp_context: params.mcp_context.map(Into::into),
     };
 
-    let response_stream = server_api.generate_multi_agent_output(&request).await;
+    let response_stream = server_api
+        .generate_multi_agent_output(
+            &request,
+            params.session_context.helm_tab_binding(),
+        )
+        .await;
     match response_stream {
         Ok(stream) => {
             let output_stream = stream.take_until(cancellation_rx);
@@ -195,7 +205,7 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
         supported_tools.push(api::ToolType::FetchConversation);
     }
 
-    match params.session_context.session_type() {
+    match params.session_context.effective_session_type().0 {
         None | Some(SessionType::Local) => {
             supported_tools.extend(&[
                 api::ToolType::ReadFiles,
@@ -286,7 +296,7 @@ fn get_supported_cli_agent_tools(params: &RequestParams) -> Vec<api::ToolType> {
         api::ToolType::FileGlobV2,
     ];
 
-    match params.session_context.session_type() {
+    match params.session_context.effective_session_type().0 {
         None | Some(SessionType::Local) => {
             supported_cli_agent_tools
                 .extend(&[api::ToolType::ReadFiles, api::ToolType::SearchCodebase]);

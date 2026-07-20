@@ -66,6 +66,7 @@ use crate::terminal::{
     model::terminal_model::TerminalModel,
     ShellLaunchData,
 };
+use crate::workspace::WorkspaceRegistry;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{send_telemetry_from_ctx, server::telemetry::TelemetryEvent};
@@ -90,11 +91,46 @@ use super::orchestration_event_streamer::{
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
+/// Resolve `terminal_view_id` to the `PaneGroup` that owns it and read the
+/// frozen Helm tab binding snapshot (if any). Returns `None` for local
+/// tabs or when the view cannot be located.
+///
+/// Mirrors `orchestration_conversation_links::pane_group_id_containing_terminal_view`
+/// — walks `WorkspaceRegistry::all_workspaces → tab_views → visible_pane_ids
+/// → terminal_view_from_pane_id` and matches on `terminal_view.id()`.
+fn read_helm_tab_binding_for_view(
+    terminal_view_id: EntityId,
+    app: &AppContext,
+) -> Option<Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>> {
+    let registry = WorkspaceRegistry::as_ref(app);
+    for (_, workspace_handle) in registry.all_workspaces(app) {
+        let workspace = workspace_handle.as_ref(app);
+        for pane_group_handle in workspace.tab_views() {
+            let pane_group = pane_group_handle.as_ref(app);
+            for pane_id in pane_group.visible_pane_ids() {
+                if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app) {
+                    if terminal_view.id() == terminal_view_id {
+                        return pane_group.helm_tab_binding();
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionContext {
     session_type: Option<SessionType>,
     shell: Option<ShellLaunchData>,
     current_working_directory: Option<String>,
+    /// Per-tab Helm endpoint binding snapshot (hw-o8h). `None` for local
+    /// tabs or for callers that don't supply a terminal_view_id (e.g. the
+    /// search-codebase / request-file-edits helpers that work on an
+    /// `ActiveSession` directly). The `Arc` is a cheap clone of whatever
+    /// the owning `PaneGroup` currently has installed — including the
+    /// latest JWT after a refresh swap.
+    helm_tab_binding: Option<Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>>,
 }
 
 impl SessionContext {
@@ -103,7 +139,33 @@ impl SessionContext {
             session_type: session.session_type(app),
             shell: session.shell_launch_data(app),
             current_working_directory: session.current_working_directory().cloned(),
+            // No terminal_view_id → cannot resolve the owning PaneGroup;
+            // callers that need the binding snapshot must use
+            // `from_session_for_view`. Local-bypass path.
+            helm_tab_binding: None,
         }
+    }
+
+    /// Construct a `SessionContext` that ALSO snapshots the helm tab
+    /// binding from the PaneGroup owning `terminal_view_id`. Used by the
+    /// request-creation paths in `BlocklistAIController` so the binding
+    /// (or its absence) flows through `RequestParams` and into
+    /// `ServerApi::generate_multi_agent_output`.
+    ///
+    /// If the terminal_view_id does not resolve to a PaneGroup (or the
+    /// PaneGroup has no binding), the resulting `SessionContext` has
+    /// `helm_tab_binding = None` — local-bypass path, existing behavior
+    /// unchanged.
+    pub fn from_session_for_view(
+        session: &ActiveSession,
+        terminal_view_id: Option<EntityId>,
+        app: &AppContext,
+    ) -> Self {
+        let mut ctx = Self::from_session(session, app);
+        if let Some(view_id) = terminal_view_id {
+            ctx.helm_tab_binding = read_helm_tab_binding_for_view(view_id, app);
+        }
+        ctx
     }
 
     pub fn session_type(&self) -> &Option<SessionType> {
@@ -116,6 +178,24 @@ impl SessionContext {
 
     pub fn current_working_directory(&self) -> &Option<String> {
         &self.current_working_directory
+    }
+
+    /// Per-tab Helm endpoint binding snapshot, if any. The caller can use
+    /// this to decide whether to route to `helm_oz` (remote binding) or
+    /// to the existing OpenRouter / hosted endpoint paths (no binding).
+    pub fn helm_tab_binding(
+        &self,
+    ) -> Option<&Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>> {
+        self.helm_tab_binding.as_ref()
+    }
+
+    /// Returns `true` if the session is bound to a remote Helm endpoint.
+    /// This is the canonical "is this a remote-bound tab" check for
+    /// guardrails: it keys on the per-tab binding, NOT on the underlying
+    /// terminal session type. A local Mac shell with a remote Helm
+    /// binding is "remote" for guardrail purposes.
+    pub fn is_helm_remote(&self) -> bool {
+        self.helm_tab_binding.is_some()
     }
 
     /// Returns the remote host ID if this is a `WarpifiedRemote` session with
@@ -133,12 +213,40 @@ impl SessionContext {
         matches!(self.session_type, Some(SessionType::WarpifiedRemote { .. }))
     }
 
+    /// Effective session type used by guardrails (tool stripping,
+    /// local-fallback refusal, OpenRouter function conversion). Returns
+    /// `WarpifiedRemote { host_id: None }` when a helm tab binding is
+    /// installed — the Mac terminal may be local while the helm endpoint
+    /// tab is remote, and the guardrails must treat that case as remote
+    /// for safety (hw-o8h).
+    ///
+    /// The returned tuple is `(session_type, helm_override_active)`:
+    /// * `session_type` — the effective type to match on.
+    /// * `helm_override_active` — `true` iff the effective type was
+    ///   synthesized from a helm binding rather than the actual session.
+    ///   This lets callers preserve "local" behavior for fields that
+    ///   should NOT be overridden (e.g. a per-session CWD that came from
+    ///   the Mac terminal).
+    pub fn effective_session_type(&self) -> (Option<SessionType>, bool) {
+        if self.helm_tab_binding.is_some()
+            && matches!(self.session_type, None | Some(SessionType::Local))
+        {
+            (
+                Some(SessionType::WarpifiedRemote { host_id: None }),
+                true,
+            )
+        } else {
+            (self.session_type.clone(), false)
+        }
+    }
+
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         SessionContext {
             session_type: None,
             shell: None,
             current_working_directory: None,
+            helm_tab_binding: None,
         }
     }
 
@@ -148,6 +256,19 @@ impl SessionContext {
             session_type,
             shell: None,
             current_working_directory: None,
+            helm_tab_binding: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_with_helm_binding_for_test(
+        binding: Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>,
+    ) -> Self {
+        SessionContext {
+            session_type: None,
+            shell: None,
+            current_working_directory: None,
+            helm_tab_binding: Some(binding),
         }
     }
 }
@@ -2080,7 +2201,11 @@ impl BlocklistAIController {
 
         let request_params = api::RequestParams::new(
             Some(self.terminal_view_id),
-            SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
+            SessionContext::from_session_for_view(
+                self.active_session.as_ref(ctx),
+                Some(self.terminal_view_id),
+                ctx,
+            ),
             &request_input,
             conversation_data,
             metadata,
@@ -2287,7 +2412,11 @@ impl BlocklistAIController {
 
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_view_id),
-            SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
+            SessionContext::from_session_for_view(
+                self.active_session.as_ref(ctx),
+                Some(self.terminal_view_id),
+                ctx,
+            ),
             &request_input,
             conversation_data.clone(),
             query_metadata,

@@ -1232,16 +1232,37 @@ impl ServerApi {
 /// hosted endpoint: protobuf request body, SSE response of base64-url-safe-
 /// encoded protobuf ResponseEvents.
 ///
-/// `bearer` is the agent JWT (Gap 2: helm_oz validates it and binds execution
-/// to the token's `endpoint_id`). It normally comes from the launch config
-/// (Gap 4: `~/.config/helm/launch.json`); `HELM_OZ_BEARER` remains a dev bridge.
+/// Route kind for `route_to_helm_oz`. Determines the URL path used and
+/// whether a bearer is required (hw-o8h).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HelmOzRoute {
+    /// Dedicated remote-agent path: `/ai/multi-agent/remote`. The bearer
+    /// is the bound endpoint's agent JWT — required.
+    Remote,
+    /// Local/dev-only path: `/ai/multi-agent`. The bearer is optional;
+    /// a `None` bearer means "local mode in helm_oz".
+    LocalDev,
+}
+
+/// Send a multi-agent request to helm_oz over the chosen route kind.
+///
+/// `bearer` semantics depend on the kind: `Remote` requires a non-empty
+/// bearer (the binding's agent_token); `LocalDev` may pass `None` for
+/// the existing dev bridge behavior. The remote path uses
+/// `/ai/multi-agent/remote` — distinct from the local path so helm_oz
+/// can reject mismatched routes (e.g. a remote JWT landing on the
+/// generic `/ai/multi-agent`).
 async fn route_to_helm_oz(
     client: &http_client::Client,
     request: &warp_multi_agent_api::Request,
     oz_url: &str,
     bearer: Option<&str>,
+    kind: HelmOzRoute,
 ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>> {
-    let url = format!("{}/ai/multi-agent", oz_url.trim_end_matches('/'));
+    let url = match kind {
+        HelmOzRoute::Remote => format!("{}/ai/multi-agent/remote", oz_url.trim_end_matches('/')),
+        HelmOzRoute::LocalDev => format!("{}/ai/multi-agent", oz_url.trim_end_matches('/')),
+    };
     let request_builder = client
         .post(url)
         .proto(request)
@@ -1282,19 +1303,71 @@ async fn route_to_helm_oz(
     }
 }
 
+    /// Route a multi-agent request to the appropriate backend.
+    ///
+    /// `helm_tab_binding` carries the per-tab binding snapshot from the
+    /// owning `PaneGroup` (hw-o8h). It is authoritative for routing
+    /// decisions on remote-bound tabs:
+    ///
+    /// * `Some(binding)` — the tab is bound to a remote Helm endpoint.
+    ///   Route to `binding.helm_oz_url` with `binding.agent_token` as the
+    ///   bearer. OpenRouter/hosted fallbacks are NOT consulted (a remote-
+    ///   bound tab must go to its endpoint; falling through to OpenRouter
+    ///   would defeat the binding).
+    /// * `None` — local tab (or no view lookup succeeded). Existing
+    ///   precedence applies: launch.json → HELM_OZ_URL env → OpenRouter
+    ///   BYOK → Warp hosted endpoint.
+    ///
+    /// For a remote-bound tab with a missing token, the function returns
+    /// a typed [`AIApiError`] rather than silently falling through. The
+    /// remote-tab path never calls `helm_launch::launch_target` — that
+    /// would re-introduce the cross-talk the per-tab binding exists to
+    /// prevent.
     pub async fn generate_multi_agent_output(
         &self,
         request: &warp_multi_agent_api::Request,
+        helm_tab_binding: Option<&Arc<helm_tab_binding::HelmEndpointBinding>>,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
-        // Gap 3/4: route to helm_oz when configured. helm_oz is the brain that
-        // uses OpenRouter for reasoning + Portal MCP for endpoint execution.
-        // Precedence: launch.json (~/.config/helm/launch.json) → HELM_OZ_URL
-        // env (dev bridge). When set, the inline OpenRouter adapter and Warp's
-        // hosted endpoint are both bypassed.
-        if let Some(target) = helm_launch::launch_target() {
+        // hw-o8h: a remote-bound tab routes only to its bound endpoint.
+        // The binding is the source of truth — do NOT consult launch.json
+        // or env vars for a bound request.
+        if let Some(binding) = helm_tab_binding {
+            if binding.agent_token.trim().is_empty() {
+                // Fail closed: a remote tab missing its bearer would
+                // otherwise silently fall through to a different backend.
+                log::error!(
+                    "helm: remote-bound tab {} missing agent_token; refusing request",
+                    binding.endpoint_id
+                );
+                return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+                    "remote Helm tab {} has no agent_token; cannot route request",
+                    binding.endpoint_id
+                ))));
+            }
             log::info!(
-                "helm: routing multi-agent request to helm_oz at {}",
+                "helm: routing multi-agent request to helm_oz remote at {} (endpoint {})",
+                binding.helm_oz_url,
+                binding.endpoint_id
+            );
+            return Self::route_to_helm_oz(
+                &self.client,
+                request,
+                &binding.helm_oz_url,
+                Some(&binding.agent_token),
+                HelmOzRoute::Remote,
+            )
+            .await;
+        }
+
+        // Unbound (local) tab path. hw-o8h: local tabs MUST NOT consult
+        // launch.json — that file is meaningful only for remote-bound
+        // tabs whose binding has been frozen at open time. The env-only
+        // resolver is the local/dev bridge: `HELM_OZ_URL` + optional
+        // `HELM_OZ_BEARER`. No launch.json read on this path.
+        if let Some(target) = helm_launch::env_only_local_target() {
+            log::info!(
+                "helm: routing multi-agent request to helm_oz local-dev at {}",
                 target.helm_oz_url
             );
             return Self::route_to_helm_oz(
@@ -1302,6 +1375,7 @@ async fn route_to_helm_oz(
                 request,
                 &target.helm_oz_url,
                 target.agent_token.as_deref(),
+                HelmOzRoute::LocalDev,
             )
             .await;
         }

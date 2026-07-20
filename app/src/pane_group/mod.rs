@@ -36,6 +36,7 @@ use crate::pane_group::pane::ActionOrigin;
 use crate::quit_warning::UnsavedStateSummary;
 #[cfg(target_family = "wasm")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::server_api::helm_tab_binding::{HelmEndpointBinding, HelmTabBinding};
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
 use crate::settings_view::SettingsSection;
@@ -921,6 +922,18 @@ pub struct PaneGroup {
 
     /// Tab-level custom title set via the rename-tab flow.
     custom_title: Option<String>,
+
+    /// Per-tab Helm endpoint binding (hw-o8h). `None` for local tabs;
+    /// `Some` for tabs opened from a `helm-warp://connect?…` URL.
+    ///
+    /// The binding is the runtime owner of the tab's endpoint identity:
+    /// once frozen it is immutable for the lifetime of the tab. To target
+    /// a different endpoint, open a new tab. JWT rotation overwrites the
+    /// token in place (same-endpoint refresh only).
+    ///
+    /// Lives on the PaneGroup, not in any process-global registry — see
+    /// `app/src/server/server_api/helm_tab_binding.rs` for the rationale.
+    helm_tab_binding: HelmTabBinding,
 }
 
 /// Origin metadata for a split-off child agent tab; used to re-adopt the
@@ -3080,6 +3093,7 @@ impl PaneGroup {
             child_agent_panes: HashMap::new(),
             child_agent_origin: None,
             custom_title: None,
+            helm_tab_binding: HelmTabBinding::new(),
         };
 
         // Notify any restored panes that they belong to this pane group.
@@ -5477,6 +5491,54 @@ impl PaneGroup {
         if let Some(pane) = self.focused_pane_content(ctx) {
             pane.focus(ctx);
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Helm tab binding (hw-o8h)
+    // ---------------------------------------------------------------------
+
+    /// Snapshot the tab's current Helm binding (cheap Arc clone), or `None`
+    /// for a local tab. Callers (e.g. `SessionContext` construction) use
+    /// this for per-request routing decisions. The Arc clone means a
+    /// refresh-token swap on another thread is observed by future readers
+    /// but not retroactively by this one.
+    pub fn helm_tab_binding(&self) -> Option<Arc<HelmEndpointBinding>> {
+        self.helm_tab_binding.get()
+    }
+
+    /// Returns `true` if this tab has a remote Helm binding installed.
+    /// Used by guardrails that key on remote status (tool stripping,
+    /// local-fallback refusal, OpenRouter conversion) — a remote-bound
+    /// tab is "remote" for those purposes regardless of the underlying
+    /// terminal session being a local Mac shell.
+    pub fn is_helm_remote(&self) -> bool {
+        self.helm_tab_binding.is_remote()
+    }
+
+    /// Freeze a remote binding on this tab. Called exactly once at tab
+    /// open time from `open_helm_remote_agent_tab`. Refuses on a tab that
+    /// is already bound (per-tab immutability — open a new tab for a new
+    /// endpoint).
+    pub fn freeze_helm_tab_binding(
+        &mut self,
+        binding: HelmEndpointBinding,
+    ) -> Result<(), helm_tab_binding::BindingError> {
+        self.helm_tab_binding.freeze_remote(binding)
+    }
+
+    /// Same-endpoint token rotation. Different endpoint is refused.
+    pub fn refresh_helm_tab_token(
+        &mut self,
+        endpoint_identity: (&str, &str, &str, &str, &str),
+        fresh_token: &str,
+    ) -> Result<(), helm_tab_binding::BindingError> {
+        self.helm_tab_binding
+            .try_refresh_token(endpoint_identity, fresh_token)
+    }
+
+    /// Drop the binding (called on tab close / refresh-loop teardown).
+    pub fn clear_helm_tab_binding(&mut self) {
+        self.helm_tab_binding.clear();
     }
 
     fn close_active_pane_with_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
