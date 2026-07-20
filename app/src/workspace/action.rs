@@ -45,6 +45,25 @@ use super::tab_settings::{
 };
 use super::view::{OnboardingTutorial, WorkspaceBanner};
 
+#[derive(Clone)]
+pub struct HelmExchangeCode(String);
+
+impl HelmExchangeCode {
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for HelmExchangeCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HelmExchangeCode([REDACTED])")
+    }
+}
+
 /// This enum determines how the search query is initialized when opening command search.
 #[derive(Clone, Default, Debug)]
 pub enum InitContent {
@@ -156,6 +175,11 @@ pub enum WorkspaceAction {
     AddAmbientAgentTab,
     /// Add a new tab that immediately enters agent view with a new conversation.
     AddAgentTab,
+    ConnectHelmEndpoint {
+        portal: String,
+        exchange: HelmExchangeCode,
+        endpoint_id: String,
+    },
     /// Add a new tab running a local Docker sandbox via `sbx`.
     AddDockerSandboxTab,
     OpenNewSessionMenu {
@@ -832,6 +856,7 @@ impl WorkspaceAction {
             | ToggleUserMenu
             | ClickedAIAssistantIcon
             | ToggleAIAssistant
+            | ConnectHelmEndpoint { .. }
             | OpenCloudAgentSetupGuide
             | ToggleKeybindingsPage
             | ShowCommandSearch(_)

@@ -192,6 +192,7 @@ use crate::search::command_palette::view::NavigationMode;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::helm_tab_binding::HelmEndpointBinding;
 use crate::server::server_api::auth::AuthClient;
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior,
@@ -4366,6 +4367,14 @@ impl Workspace {
 
     /// Add a new terminal tab and enter the agent view with a new conversation.
     fn add_terminal_tab_with_new_agent_view(&mut self, ctx: &mut ViewContext<Self>) {
+        self.add_terminal_tab_with_new_agent_view_and_helm_binding(None, ctx);
+    }
+
+    fn add_terminal_tab_with_new_agent_view_and_helm_binding(
+        &mut self,
+        helm_binding: Option<HelmEndpointBinding>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let was_left_panel_open = self.active_tab_pane_group().as_ref(ctx).left_panel_open;
         self.add_new_session_tab_internal_with_default_session_mode_behavior(
             NewSessionSource::Tab,
@@ -4380,6 +4389,14 @@ impl Workspace {
             if was_left_panel_open {
                 pane_group.set_left_panel_open(true, ctx);
             }
+            if let Some(binding) = helm_binding {
+                let title = binding.endpoint_friendly_label.clone();
+                if let Err(error) = pane_group.freeze_helm_tab_binding(binding) {
+                    log::warn!("helm-warp: failed to freeze tab binding: {error}");
+                    return;
+                }
+                pane_group.set_title(&title, ctx);
+            }
             if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                 terminal_view.update(ctx, |view, ctx| {
                     view.enter_agent_view_for_new_conversation(
@@ -4390,6 +4407,40 @@ impl Workspace {
                 });
             }
         });
+    }
+
+    fn connect_helm_endpoint(
+        &mut self,
+        portal: String,
+        exchange: crate::workspace::HelmExchangeCode,
+        endpoint_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let display_endpoint_id = endpoint_id.clone();
+        ctx.spawn(
+            crate::uri::helm_warp::run_exchange(portal, exchange, endpoint_id),
+            move |workspace, result, ctx| match result {
+                Ok(binding) => {
+                    workspace.add_terminal_tab_with_new_agent_view_and_helm_binding(
+                        Some(binding),
+                        ctx,
+                    );
+                }
+                Err(error) => {
+                    log::warn!(
+                        "helm-warp: exchange failed for endpoint {display_endpoint_id}: {error:#}"
+                    );
+                    workspace.toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!(
+                                "Could not connect to endpoint {display_endpoint_id}."
+                            )),
+                            ctx,
+                        );
+                    });
+                }
+            },
+        );
     }
 
     fn toggle_ai_assistant_panel(&mut self, ctx: &mut ViewContext<Self>) {
@@ -21013,6 +21064,16 @@ impl TypedActionView for Workspace {
             AddGetStartedTab => self.add_get_started_tab(ctx),
             AddAmbientAgentTab => self.add_ambient_agent_tab(ctx),
             AddAgentTab => self.add_terminal_tab_with_new_agent_view(ctx),
+            ConnectHelmEndpoint {
+                portal,
+                exchange,
+                endpoint_id,
+            } => self.connect_helm_endpoint(
+                portal.clone(),
+                exchange.clone(),
+                endpoint_id.clone(),
+                ctx,
+            ),
             AddDockerSandboxTab => self.add_docker_sandbox_tab(ctx),
             StartAgentOnboardingTutorial(tutorial) => {
                 self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)

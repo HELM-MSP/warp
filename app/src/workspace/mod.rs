@@ -53,8 +53,8 @@ use warpui::keymap::{BindingDescription, EditableBinding};
 use warpui::AppContext;
 
 pub use action::{
-    CommandSearchOptions, InitContent, RestoreConversationLayout, TabContextMenuAnchor,
-    VerticalTabsPaneContextMenuTarget, WorkspaceAction,
+    CommandSearchOptions, HelmExchangeCode, InitContent, RestoreConversationLayout,
+    TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget, WorkspaceAction,
 };
 pub use active_session::ActiveSession;
 pub use global_actions::{
