@@ -36,7 +36,9 @@ use crate::pane_group::pane::ActionOrigin;
 use crate::quit_warning::UnsavedStateSummary;
 #[cfg(target_family = "wasm")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::server_api::helm_tab_binding::{HelmEndpointBinding, HelmTabBinding};
+use crate::server::server_api::helm_tab_binding::{
+    BindingError, HelmEndpointBinding, HelmTabBinding,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
 use crate::settings_view::SettingsSection;
@@ -5522,7 +5524,7 @@ impl PaneGroup {
     pub fn freeze_helm_tab_binding(
         &mut self,
         binding: HelmEndpointBinding,
-    ) -> Result<(), helm_tab_binding::BindingError> {
+    ) -> Result<(), BindingError> {
         self.helm_tab_binding.freeze_remote(binding)
     }
 
@@ -5531,7 +5533,7 @@ impl PaneGroup {
         &mut self,
         endpoint_identity: (&str, &str, &str, &str, &str),
         fresh_token: &str,
-    ) -> Result<(), helm_tab_binding::BindingError> {
+    ) -> Result<(), BindingError> {
         self.helm_tab_binding
             .try_refresh_token(endpoint_identity, fresh_token)
     }

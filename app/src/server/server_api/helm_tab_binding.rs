@@ -283,7 +283,7 @@ pub fn freeze_remote(
     })
 }
 
-fn take(field: Option<&str>, name: &str, missing: &mut Vec<&'static str>) -> String {
+fn take(field: Option<&str>, name: &'static str, missing: &mut Vec<&'static str>) -> String {
     match field.map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => s.to_string(),
         None => {
