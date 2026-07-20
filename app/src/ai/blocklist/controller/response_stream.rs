@@ -203,7 +203,25 @@ impl ResponseStream {
                 );
             }
             Err(e) => {
-                log::error!("Failed to send request to multi-agent API: {e:?}");
+                match &e {
+                    // hw-o8h fail-closed: we located the request's
+                    // terminal view's session context but could not find
+                    // its owning PaneGroup. The request MUST NOT route
+                    // to local / OpenRouter / hosted; surface the
+                    // distinct reason here so it shows up in logs and
+                    // telemetry as such rather than a generic
+                    // `Other` anyhow blob.
+                    ConvertToAPITypeError::HelmTabLookupFailed => {
+                        log::error!(
+                            "helm: refusing request to multi-agent API — helm tab binding \
+                             lookup could not locate owning PaneGroup (hw-o8h fail-closed); \
+                             will NOT route to local / OpenRouter / hosted endpoint"
+                        );
+                    }
+                    _ => {
+                        log::error!("Failed to send request to multi-agent API: {e:?}");
+                    }
+                }
                 self.on_response_stream_complete(request_id, ctx);
             }
         }

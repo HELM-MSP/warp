@@ -7,6 +7,16 @@ pub enum ConvertToAPITypeError {
     Ignore,
     #[error("Conversion from type {0} is unimplemented.")]
     Unimplemented(String),
+    /// Fail-closed typed error emitted before any local / hosted /
+    /// OpenRouter / helm_oz route when the helm tab binding lookup could
+    /// not locate the owning PaneGroup for the request's terminal view
+    /// (hw-o8h). Distinct from [`Self::Ignore`] (which silently drops
+    /// the request) and from [`Self::Other`] (which is a generic
+    /// anyhow-wrapping fallback): the caller MUST surface this to the
+    /// user and MUST NOT fall through to any non-bound route, because
+    /// we have no authoritative answer about what tab the request is for.
+    #[error("helm tab binding lookup could not locate the owning PaneGroup for the request's terminal view (hw-o8h fail-closed)")]
+    HelmTabLookupFailed,
     #[error("Encountered error converting types for MultiAgentApi request: {0:?}")]
     Other(#[from] anyhow::Error),
 }

@@ -5,6 +5,7 @@ use crate::ai::agent::api::RequestParams;
 use crate::ai::blocklist::SessionContext;
 use crate::ai::llms::LLMId;
 use crate::terminal::model::session::SessionType;
+use std::sync::Arc;
 use warp_core::features::FeatureFlag;
 use warp_core::HostId;
 use warp_multi_agent_api as api;
@@ -312,5 +313,94 @@ fn two_simultaneous_endpoints_have_independent_session_contexts() {
                 _ => None,
             }),
         Some(HostId::new("endpoint-B".to_string()).to_string())
+    );
+}
+
+// hw-o8h fail-closed lookup: the three SessionContext lookup states
+// must each project to the correct predicates. `from_session`
+// (no terminal_view_id) leaves helm_binding_status == None; a legit
+// local tab leaves FoundUnbound; a located-and-bound tab leaves
+// FoundBound; a missing-terminal-view lookup leaves TerminalViewNotFound.
+#[test]
+fn session_context_helm_predicates_reflect_each_lookup_state() {
+    use crate::server::server_api::helm_tab_binding::HelmEndpointBinding;
+
+    // No lookup attempted (from_session): predicate stays false.
+    let no_lookup = SessionContext::new_for_test();
+    assert!(no_lookup.helm_binding_status().is_none());
+    assert!(!no_lookup.is_helm_remote());
+    assert!(!no_lookup.has_unresolved_helm_binding_lookup());
+    assert!(no_lookup.helm_tab_binding().is_none());
+
+    // FoundUnbound (legitimate local tab): NOT remote, NOT unresolved,
+    // binding accessor returns None so request construction proceeds
+    // exactly as it did pre-hw-o8h.
+    let unbound = SessionContext::new_with_helm_lookup_unbound_for_test();
+    assert!(unbound.helm_binding_status().is_some());
+    assert!(!unbound.is_helm_remote());
+    assert!(!unbound.has_unresolved_helm_binding_lookup());
+    assert!(unbound.helm_tab_binding().is_none());
+
+    // FoundBound: IS remote, NOT unresolved, binding accessor returns
+    // the frozen binding so the helm_oz route picks it up.
+    let binding = HelmEndpointBinding::for_test(
+        "ep-A",
+        "laptop-A",
+        "laptop-a.local",
+        "macos",
+        "http://a.helm:18080",
+        "jwt-A",
+    );
+    let bound = SessionContext::new_with_helm_binding_for_test(Arc::new(binding.clone()));
+    assert!(bound.is_helm_remote());
+    assert!(!bound.has_unresolved_helm_binding_lookup());
+    assert_eq!(
+        bound
+            .helm_tab_binding()
+            .expect("bound session must expose its binding")
+            .endpoint_id,
+        "ep-A"
+    );
+    assert!(bound.helm_tab_binding().unwrap().agent_token == "jwt-A");
+
+    // TerminalViewNotFound: NOT remote (we don't know what it is), IS
+    // unresolved (request construction MUST fail closed).
+    let missing = SessionContext::new_with_helm_lookup_not_found_for_test();
+    assert!(missing.helm_binding_status().is_some());
+    assert!(!missing.is_helm_remote());
+    assert!(
+        missing.has_unresolved_helm_binding_lookup(),
+        "TerminalViewNotFound must trip the fail-closed predicate"
+    );
+    assert!(missing.helm_tab_binding().is_none());
+}
+
+// hw-o8h: FoundUnbound local tabs must NOT trip the fail-closed path.
+#[test]
+fn session_context_found_unbound_does_not_trigger_fail_closed() {
+    let unbound = SessionContext::new_with_helm_lookup_unbound_for_test();
+    assert!(
+        !unbound.has_unresolved_helm_binding_lookup(),
+        "FoundUnbound is the legitimate local-tab state and must pass through unchanged"
+    );
+}
+
+// hw-o8h: FoundBound must NOT trigger fail-closed (we have the
+// binding; routing should proceed normally to helm_oz).
+#[test]
+fn session_context_found_bound_does_not_trigger_fail_closed() {
+    use crate::server::server_api::helm_tab_binding::HelmEndpointBinding;
+    let binding = HelmEndpointBinding::for_test(
+        "ep-A",
+        "laptop-A",
+        "laptop-a.local",
+        "macos",
+        "http://a.helm:18080",
+        "jwt-A",
+    );
+    let bound = SessionContext::new_with_helm_binding_for_test(Arc::new(binding));
+    assert!(
+        !bound.has_unresolved_helm_binding_lookup(),
+        "FoundBound has authoritative routing info; fail-closed must not fire"
     );
 }

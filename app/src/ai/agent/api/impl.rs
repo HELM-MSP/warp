@@ -14,6 +14,24 @@ pub async fn generate_multi_agent_output(
     mut params: RequestParams,
     cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
+    // hw-o8h fail-closed lookup: if `from_session_for_view` was used to
+    // build this `SessionContext` and could not locate the owning
+    // PaneGroup for the request's terminal view, we MUST NOT route to
+    // the local / hosted / OpenRouter / helm_oz fallback. We have no
+    // authoritative answer about what tab the request is for, so a
+    // silent fall-through would be indistinguishable from a cross-talk
+    // bug. Surface a typed error before any conversion or routing.
+    if params
+        .session_context
+        .has_unresolved_helm_binding_lookup()
+    {
+        log::error!(
+            "helm: refusing request — SessionContext has unresolved helm tab binding lookup \
+             (terminal view not found). Will not route to local / OpenRouter / hosted endpoint."
+        );
+        return Err(ConvertToAPITypeError::HelmTabLookupFailed);
+    }
+
     let supported_tools = params
         .supported_tools_override
         .take()

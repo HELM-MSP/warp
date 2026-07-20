@@ -91,32 +91,85 @@ use super::orchestration_event_streamer::{
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-/// Resolve `terminal_view_id` to the `PaneGroup` that owns it and read the
-/// frozen Helm tab binding snapshot (if any). Returns `None` for local
-/// tabs or when the view cannot be located.
+/// Result of resolving a `terminal_view_id` to its owning `PaneGroup`'s
+/// Helm tab binding (hw-o8h fail-closed lookup).
 ///
-/// Mirrors `orchestration_conversation_links::pane_group_id_containing_terminal_view`
-/// — walks `WorkspaceRegistry::all_workspaces → tab_views → visible_pane_ids
-/// → terminal_view_from_pane_id` and matches on `terminal_view.id()`.
+/// Three terminal states distinguish legitimate "no binding" from
+/// "we failed to find the view at all":
+///
+/// * `FoundBound(binding)` — the owning PaneGroup exists AND has a
+///   frozen remote binding. Requests must route only to that endpoint.
+/// * `FoundUnbound` — the owning PaneGroup exists and has NO binding.
+///   This is the legitimate "local tab" state and request construction
+///   must proceed exactly as it did before hw-o8h.
+/// * `TerminalViewNotFound` — we walked every PaneGroup's panes and
+///   could not locate a terminal view matching `terminal_view_id`.
+///   This must fail closed at request construction rather than silently
+///   falling through to a local / OpenRouter / hosted route, since we
+///   have no authoritative answer about what tab the request is for.
+pub(crate) enum HelmBindingLookup {
+    FoundBound(Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>),
+    FoundUnbound,
+    TerminalViewNotFound,
+}
+
+/// Resolve `terminal_view_id` to the `PaneGroup` that owns it and read the
+/// frozen Helm tab binding snapshot (if any).
+///
+/// Unlike `pane_group_id_containing_terminal_view` (which is used for
+/// UI-focusing and is happy to ignore hidden panes), this lookup uses
+/// the exhaustive `pane_ids()` iterator so it cannot miss the pane that
+/// owns the terminal view just because the pane is currently
+/// occluded/closing. Mirrors
+/// `orchestration_conversation_links::pane_group_id_containing_terminal_view`
+/// in structure — walks `WorkspaceRegistry::all_workspaces → tab_views
+/// → pane_ids → terminal_view_from_pane_id` and matches on
+/// `terminal_view.id()` — but the broader iteration and the typed
+/// three-state return let the caller distinguish "local tab" from "we
+/// couldn't find the view, fail closed".
 fn read_helm_tab_binding_for_view(
     terminal_view_id: EntityId,
     app: &AppContext,
-) -> Option<Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>> {
+) -> HelmBindingLookup {
     let registry = WorkspaceRegistry::as_ref(app);
     for (_, workspace_handle) in registry.all_workspaces(app) {
         let workspace = workspace_handle.as_ref(app);
         for pane_group_handle in workspace.tab_views() {
             let pane_group = pane_group_handle.as_ref(app);
-            for pane_id in pane_group.visible_pane_ids() {
+            for pane_id in pane_group.pane_ids() {
                 if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app) {
                     if terminal_view.id() == terminal_view_id {
-                        return pane_group.helm_tab_binding();
+                        return match pane_group.helm_tab_binding() {
+                            Some(binding) => HelmBindingLookup::FoundBound(binding),
+                            None => HelmBindingLookup::FoundUnbound,
+                        };
                     }
                 }
             }
         }
     }
-    None
+    HelmBindingLookup::TerminalViewNotFound
+}
+
+/// Status of the helm-tab-binding lookup, captured at SessionContext
+/// construction (hw-o8h).
+///
+/// The three-state design exists so request construction can
+/// distinguish "this is a legitimate local tab" from "we couldn't find
+/// the terminal view at all, fail closed" without confusing them. The
+/// pre-hw-o8h `Option<Arc<HelmEndpointBinding>>` representation
+/// conflated those — see `HelmBindingLookup`.
+#[derive(Debug, Clone)]
+pub(crate) enum HelmBindingStatus {
+    /// We located the owning PaneGroup and found no binding installed.
+    /// Legitimate local tab; existing pre-hw-o8h behavior applies.
+    FoundUnbound,
+    /// We located the owning PaneGroup and read its frozen binding.
+    FoundBound(Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>),
+    /// We could not locate the owning PaneGroup. Request construction
+    /// must fail closed rather than silently fall through to a local /
+    /// OpenRouter / hosted route.
+    TerminalViewNotFound,
 }
 
 #[derive(Debug, Clone)]
@@ -124,13 +177,14 @@ pub struct SessionContext {
     session_type: Option<SessionType>,
     shell: Option<ShellLaunchData>,
     current_working_directory: Option<String>,
-    /// Per-tab Helm endpoint binding snapshot (hw-o8h). `None` for local
-    /// tabs or for callers that don't supply a terminal_view_id (e.g. the
-    /// search-codebase / request-file-edits helpers that work on an
-    /// `ActiveSession` directly). The `Arc` is a cheap clone of whatever
-    /// the owning `PaneGroup` currently has installed — including the
-    /// latest JWT after a refresh swap.
-    helm_tab_binding: Option<Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>>,
+    /// Per-tab helm binding lookup status (hw-o8h). `None` for callers
+    /// that don't supply a terminal_view_id (e.g. the search-codebase /
+    /// request-file-edits helpers that work on an `ActiveSession`
+    /// directly) — those use `from_session`, not
+    /// `from_session_for_view`, and bypass the per-tab routing logic.
+    /// When `Some`, the value records whether we located the owning
+    /// PaneGroup and, if so, whether it had a frozen remote binding.
+    helm_binding_status: Option<HelmBindingStatus>,
 }
 
 impl SessionContext {
@@ -142,20 +196,23 @@ impl SessionContext {
             // No terminal_view_id → cannot resolve the owning PaneGroup;
             // callers that need the binding snapshot must use
             // `from_session_for_view`. Local-bypass path.
-            helm_tab_binding: None,
+            helm_binding_status: None,
         }
     }
 
-    /// Construct a `SessionContext` that ALSO snapshots the helm tab
-    /// binding from the PaneGroup owning `terminal_view_id`. Used by the
-    /// request-creation paths in `BlocklistAIController` so the binding
-    /// (or its absence) flows through `RequestParams` and into
-    /// `ServerApi::generate_multi_agent_output`.
+    /// Construct a `SessionContext` that ALSO records the helm tab
+    /// binding lookup from the PaneGroup owning `terminal_view_id`.
+    /// Used by the request-creation paths in `BlocklistAIController` so
+    /// the lookup status flows through `RequestParams` into request
+    /// construction.
     ///
-    /// If the terminal_view_id does not resolve to a PaneGroup (or the
-    /// PaneGroup has no binding), the resulting `SessionContext` has
-    /// `helm_tab_binding = None` — local-bypass path, existing behavior
-    /// unchanged.
+    /// The lookup captures three terminal states (see
+    /// [`HelmBindingStatus`]): `FoundUnbound` is the legitimate local
+    /// case and preserves existing behavior; `FoundBound` carries the
+    /// frozen binding for the helm_oz route; `TerminalViewNotFound`
+    /// forces a fail-closed typed error at request construction rather
+    /// than silently falling through to the local / OpenRouter / hosted
+    /// route.
     pub fn from_session_for_view(
         session: &ActiveSession,
         terminal_view_id: Option<EntityId>,
@@ -163,7 +220,13 @@ impl SessionContext {
     ) -> Self {
         let mut ctx = Self::from_session(session, app);
         if let Some(view_id) = terminal_view_id {
-            ctx.helm_tab_binding = read_helm_tab_binding_for_view(view_id, app);
+            ctx.helm_binding_status = Some(match read_helm_tab_binding_for_view(view_id, app) {
+                HelmBindingLookup::FoundBound(binding) => HelmBindingStatus::FoundBound(binding),
+                HelmBindingLookup::FoundUnbound => HelmBindingStatus::FoundUnbound,
+                HelmBindingLookup::TerminalViewNotFound => {
+                    HelmBindingStatus::TerminalViewNotFound
+                }
+            });
         }
         ctx
     }
@@ -183,10 +246,39 @@ impl SessionContext {
     /// Per-tab Helm endpoint binding snapshot, if any. The caller can use
     /// this to decide whether to route to `helm_oz` (remote binding) or
     /// to the existing OpenRouter / hosted endpoint paths (no binding).
+    ///
+    /// `None` here means either "no binding installed on the owning
+    /// PaneGroup" (`HelmBindingStatus::FoundUnbound`) OR "no lookup was
+    /// attempted" (`helm_binding_status == None`). Use
+    /// [`SessionContext::helm_binding_status`] when the caller must
+    /// distinguish those — request construction does, via
+    /// [`SessionContext::has_unresolved_helm_binding_lookup`].
     pub fn helm_tab_binding(
         &self,
     ) -> Option<&Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>> {
-        self.helm_tab_binding.as_ref()
+        match &self.helm_binding_status {
+            Some(HelmBindingStatus::FoundBound(binding)) => Some(binding),
+            _ => None,
+        }
+    }
+
+    /// Full lookup status captured at construction. Lets callers
+    /// distinguish the three states (no lookup, found-unbound, found-
+    /// bound, terminal-view-not-found). Prefer the narrower
+    /// `helm_tab_binding()` / `is_helm_remote()` for guardrail checks.
+    pub(crate) fn helm_binding_status(&self) -> Option<&HelmBindingStatus> {
+        self.helm_binding_status.as_ref()
+    }
+
+    /// Returns `true` iff a helm lookup was attempted AND the owning
+    /// PaneGroup could not be located. Callers MUST fail closed (return
+    /// a typed error) instead of routing to the local / OpenRouter /
+    /// hosted endpoint when this is true (hw-o8h).
+    pub fn has_unresolved_helm_binding_lookup(&self) -> bool {
+        matches!(
+            self.helm_binding_status,
+            Some(HelmBindingStatus::TerminalViewNotFound)
+        )
     }
 
     /// Returns `true` if the session is bound to a remote Helm endpoint.
@@ -195,7 +287,10 @@ impl SessionContext {
     /// terminal session type. A local Mac shell with a remote Helm
     /// binding is "remote" for guardrail purposes.
     pub fn is_helm_remote(&self) -> bool {
-        self.helm_tab_binding.is_some()
+        matches!(
+            self.helm_binding_status,
+            Some(HelmBindingStatus::FoundBound(_))
+        )
     }
 
     /// Returns the remote host ID if this is a `WarpifiedRemote` session with
@@ -228,7 +323,7 @@ impl SessionContext {
     ///   should NOT be overridden (e.g. a per-session CWD that came from
     ///   the Mac terminal).
     pub fn effective_session_type(&self) -> (Option<SessionType>, bool) {
-        if self.helm_tab_binding.is_some()
+        if self.is_helm_remote()
             && matches!(self.session_type, None | Some(SessionType::Local))
         {
             (
@@ -246,7 +341,7 @@ impl SessionContext {
             session_type: None,
             shell: None,
             current_working_directory: None,
-            helm_tab_binding: None,
+            helm_binding_status: None,
         }
     }
 
@@ -256,7 +351,7 @@ impl SessionContext {
             session_type,
             shell: None,
             current_working_directory: None,
-            helm_tab_binding: None,
+            helm_binding_status: None,
         }
     }
 
@@ -268,7 +363,33 @@ impl SessionContext {
             session_type: None,
             shell: None,
             current_working_directory: None,
-            helm_tab_binding: Some(binding),
+            helm_binding_status: Some(HelmBindingStatus::FoundBound(binding)),
+        }
+    }
+
+    /// Test-only constructor: a `SessionContext` whose helm lookup came
+    /// back with no binding installed on the owning PaneGroup.
+    /// Equivalent to a legitimate local tab.
+    #[cfg(test)]
+    pub fn new_with_helm_lookup_unbound_for_test() -> Self {
+        SessionContext {
+            session_type: None,
+            shell: None,
+            current_working_directory: None,
+            helm_binding_status: Some(HelmBindingStatus::FoundUnbound),
+        }
+    }
+
+    /// Test-only constructor: a `SessionContext` whose helm lookup
+    /// failed to locate the owning PaneGroup. Request construction must
+    /// fail closed when this status is observed.
+    #[cfg(test)]
+    pub fn new_with_helm_lookup_not_found_for_test() -> Self {
+        SessionContext {
+            session_type: None,
+            shell: None,
+            current_working_directory: None,
+            helm_binding_status: Some(HelmBindingStatus::TerminalViewNotFound),
         }
     }
 }
