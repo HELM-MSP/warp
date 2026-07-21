@@ -4,11 +4,10 @@ use anyhow::{Context as _, Result};
 use serde::Deserialize;
 use url::Url;
 
-use crate::server::server_api::helm_tab_binding::{self, EndpointIdentity, HelmEndpointBinding};
+use crate::server::server_api::helm_tab_binding::{
+    self, EndpointIdentity, HelmEndpointBinding, HelmTabBinding,
+};
 use crate::workspace::{HelmExchangeCode, WorkspaceAction};
-
-#[cfg(test)]
-use crate::server::server_api::helm_tab_binding::HelmTabBinding;
 
 pub const SCHEME: &str = "helm-warp";
 
