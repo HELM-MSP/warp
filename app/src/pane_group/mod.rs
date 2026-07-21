@@ -37,7 +37,7 @@ use crate::quit_warning::UnsavedStateSummary;
 #[cfg(target_family = "wasm")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::helm_tab_binding::{
-    BindingError, HelmEndpointBinding, HelmTabBinding,
+    BindingError, EndpointIdentity, HelmEndpointBinding, HelmTabBinding,
 };
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
@@ -5539,7 +5539,7 @@ impl PaneGroup {
     /// Same-endpoint token rotation. Different endpoint is refused.
     pub fn refresh_helm_tab_token(
         &mut self,
-        endpoint_identity: (&str, &str, &str, &str, &str),
+        endpoint_identity: &EndpointIdentity,
         fresh_token: &str,
     ) -> Result<(), BindingError> {
         self.helm_tab_binding

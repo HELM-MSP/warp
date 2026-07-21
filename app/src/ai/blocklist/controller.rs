@@ -314,24 +314,13 @@ impl SessionContext {
     /// installed — the Mac terminal may be local while the helm endpoint
     /// tab is remote, and the guardrails must treat that case as remote
     /// for safety (hw-o8h).
-    ///
-    /// The returned tuple is `(session_type, helm_override_active)`:
-    /// * `session_type` — the effective type to match on.
-    /// * `helm_override_active` — `true` iff the effective type was
-    ///   synthesized from a helm binding rather than the actual session.
-    ///   This lets callers preserve "local" behavior for fields that
-    ///   should NOT be overridden (e.g. a per-session CWD that came from
-    ///   the Mac terminal).
-    pub fn effective_session_type(&self) -> (Option<SessionType>, bool) {
+    pub fn effective_session_type(&self) -> Option<SessionType> {
         if self.is_helm_remote()
             && matches!(self.session_type, None | Some(SessionType::Local))
         {
-            (
-                Some(SessionType::WarpifiedRemote { host_id: None }),
-                true,
-            )
+            Some(SessionType::WarpifiedRemote { host_id: None })
         } else {
-            (self.session_type.clone(), false)
+            self.session_type.clone()
         }
     }
 

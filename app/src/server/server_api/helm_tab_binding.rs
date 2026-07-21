@@ -63,18 +63,6 @@ impl EndpointIdentity {
             helm_oz_url: b.helm_oz_url.clone(),
         }
     }
-
-    /// Tuple form retained for callers that prefer to compare without
-    /// allocating. Two identities are equal iff all five fields match.
-    pub fn as_tuple(&self) -> (&str, &str, &str, &str, &str) {
-        (
-            &self.endpoint_id,
-            &self.endpoint_friendly_label,
-            &self.endpoint_hostname,
-            &self.endpoint_os,
-            &self.helm_oz_url,
-        )
-    }
 }
 
 /// Endpoint identity + routing target frozen at tab-open time.
@@ -118,19 +106,6 @@ impl HelmEndpointBinding {
             helm_oz_url: helm_oz_url.to_string(),
             agent_token: agent_token.to_string(),
         }
-    }
-
-    /// The stable endpoint identity used for refresh/rebind matching.
-    /// Two endpoints are the same iff their identity matches; token may
-    /// differ across the same endpoint (JWT rotation).
-    pub fn endpoint_identity(&self) -> (&str, &str, &str, &str, &str) {
-        (
-            &self.endpoint_id,
-            &self.endpoint_friendly_label,
-            &self.endpoint_hostname,
-            &self.endpoint_os,
-            &self.helm_oz_url,
-        )
     }
 
     /// Owned clone of the endpoint identity (no token). Useful for the
@@ -198,7 +173,7 @@ impl HelmTabBinding {
         let Some(existing) = guard.as_ref() else {
             return Err(BindingError::NotFrozen);
         };
-        if existing.endpoint_identity() != candidate.endpoint_identity() {
+        if existing.endpoint_identity_owned() != candidate.endpoint_identity_owned() {
             return Err(BindingError::EndpointMismatch {
                 existing: existing.endpoint_id.clone(),
                 attempted: candidate.endpoint_id.clone(),
@@ -217,7 +192,7 @@ impl HelmTabBinding {
     /// [`BindingError::EndpointMismatch`].
     pub fn try_refresh_token(
         &self,
-        endpoint_identity: (&str, &str, &str, &str, &str),
+        endpoint_identity: &EndpointIdentity,
         fresh_token: &str,
     ) -> Result<(), BindingError> {
         if fresh_token.trim().is_empty() {
@@ -229,10 +204,10 @@ impl HelmTabBinding {
         let Some(existing) = guard.as_ref() else {
             return Err(BindingError::NotFrozen);
         };
-        if existing.endpoint_identity() != endpoint_identity {
+        if existing.endpoint_identity_owned() != *endpoint_identity {
             return Err(BindingError::EndpointMismatch {
                 existing: existing.endpoint_id.clone(),
-                attempted: endpoint_identity.0.to_string(),
+                attempted: endpoint_identity.endpoint_id.clone(),
             });
         }
         let mut next = (**existing).clone();
@@ -485,22 +460,27 @@ mod tests {
         assert_eq!(slot.get().unwrap().agent_token, "jwt-A");
     }
 
+    fn identity_for_full_args() -> EndpointIdentity {
+        EndpointIdentity::from_binding(&freeze_remote_from_tuple(full_args()).unwrap())
+    }
+
+    fn identity_other() -> EndpointIdentity {
+        EndpointIdentity {
+            endpoint_id: "ep-OTHER".to_string(),
+            endpoint_friendly_label: "operator-laptop".to_string(),
+            endpoint_hostname: "laptop.local".to_string(),
+            endpoint_os: "macos".to_string(),
+            helm_oz_url: "http://127.0.0.1:18080".to_string(),
+        }
+    }
+
     #[test]
     fn slot_refresh_token_same_endpoint_rotates() {
         let slot = HelmTabBinding::new();
         slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap()).unwrap();
 
-        slot.try_refresh_token(
-            (
-                "ep-1",
-                "operator-laptop",
-                "laptop.local",
-                "macos",
-                "http://127.0.0.1:18080",
-            ),
-            "jwt-REFRESHED",
-        )
-        .unwrap();
+        slot.try_refresh_token(&identity_for_full_args(), "jwt-REFRESHED")
+            .unwrap();
         assert_eq!(slot.get().unwrap().agent_token, "jwt-REFRESHED");
     }
 
@@ -510,16 +490,7 @@ mod tests {
         slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap()).unwrap();
 
         let err = slot
-            .try_refresh_token(
-                (
-                    "ep-OTHER",
-                    "operator-laptop",
-                    "laptop.local",
-                    "macos",
-                    "http://127.0.0.1:18080",
-                ),
-                "jwt-REFRESHED",
-            )
+            .try_refresh_token(&identity_other(), "jwt-REFRESHED")
             .unwrap_err();
         assert!(matches!(err, BindingError::EndpointMismatch { .. }));
         assert_eq!(slot.get().unwrap().agent_token, "jwt-A");
@@ -531,16 +502,7 @@ mod tests {
         slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap()).unwrap();
 
         let err = slot
-            .try_refresh_token(
-                (
-                    "ep-1",
-                    "operator-laptop",
-                    "laptop.local",
-                    "macos",
-                    "http://127.0.0.1:18080",
-                ),
-                "  ",
-            )
+            .try_refresh_token(&identity_for_full_args(), "  ")
             .unwrap_err();
         assert!(matches!(err, BindingError::Incomplete(_)));
     }
@@ -589,11 +551,9 @@ mod tests {
         assert_eq!(slot_b.get().unwrap().helm_oz_url, "http://b.helm:18080");
 
         // Refresh A doesn't touch B.
+        let identity_a = EndpointIdentity::from_binding(&slot_a.get().unwrap());
         slot_a
-            .try_refresh_token(
-                ("ep-A", "laptop-A", "laptop-a.local", "macos", "http://a.helm:18080"),
-                "jwt-A-REFRESHED",
-            )
+            .try_refresh_token(&identity_a, "jwt-A-REFRESHED")
             .unwrap();
         assert_eq!(slot_a.get().unwrap().agent_token, "jwt-A-REFRESHED");
         assert_eq!(slot_b.get().unwrap().agent_token, "jwt-B", "B unchanged");

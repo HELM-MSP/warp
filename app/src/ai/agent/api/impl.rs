@@ -223,7 +223,7 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
         supported_tools.push(api::ToolType::FetchConversation);
     }
 
-    match params.session_context.effective_session_type().0 {
+    match params.session_context.effective_session_type() {
         None | Some(SessionType::Local) => {
             supported_tools.extend(&[
                 api::ToolType::ReadFiles,
@@ -314,7 +314,7 @@ fn get_supported_cli_agent_tools(params: &RequestParams) -> Vec<api::ToolType> {
         api::ToolType::FileGlobV2,
     ];
 
-    match params.session_context.effective_session_type().0 {
+    match params.session_context.effective_session_type() {
         None | Some(SessionType::Local) => {
             supported_cli_agent_tools
                 .extend(&[api::ToolType::ReadFiles, api::ToolType::SearchCodebase]);

@@ -283,10 +283,9 @@ pub fn apply_refresh_to_slot(
         Some(&response.agent_token),
         response.endpoint_id.as_deref(),
     ) {
-        RefreshDecision::Rotate { fresh_agent_token } => {
-            let identity = frozen.as_tuple();
-            slot.try_refresh_token(identity, &fresh_agent_token).is_ok()
-        }
+        RefreshDecision::Rotate { fresh_agent_token } => slot
+            .try_refresh_token(frozen, &fresh_agent_token)
+            .is_ok(),
         RefreshDecision::DifferentEndpoint { .. } => false,
         RefreshDecision::MalformedResponse { .. } => false,
     }
