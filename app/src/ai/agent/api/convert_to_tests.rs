@@ -223,3 +223,65 @@ fn convert_context_isolates_two_simultaneous_endpoints() {
         "two simultaneous remote contexts produce equivalent (empty) shell payloads"
     );
 }
+
+// hw-ek5: defense-in-depth — a full-on Mac ExecutionEnvironment that
+// reaches `convert_context(_, is_remote=true)` MUST produce a context
+// whose `shell` and `operating_system` fields are both empty. The
+// upstream input builder is the second line of defense (see
+// `convert_context`) and the build-side strip lives at
+// `controller/input_context.rs`. This test pins the convert behavior
+// for the mac path so any future regression surfaces here.
+#[test]
+fn convert_context_strips_full_macos_execution_environment_for_remote() {
+    let shell_ctx = vec![AIAgentContext::ExecutionEnvironment(
+        WarpAiExecutionContext {
+            os: WarpAiOsContext {
+                category: Some("darwin".to_string()),
+                distribution: Some("macOS 14.4".to_string()),
+            },
+            shell_name: "zsh".to_string(),
+            shell_version: Some("5.9".to_string()),
+        },
+    )];
+    let api_ctx = convert_context(&shell_ctx, /* is_remote */ true);
+    assert!(
+        api_ctx.shell.is_none(),
+        "remote context never carries shell name ({:?})",
+        api_ctx.shell,
+    );
+    assert!(
+        api_ctx.operating_system.is_none(),
+        "remote context never carries OS category/distribution ({:?})",
+        api_ctx.operating_system,
+    );
+}
+
+#[test]
+fn convert_context_preserves_local_execution_environment() {
+    // Regression net for the local BYOK path: when is_remote=false, the
+    // shell + operating_system fields round-trip intact. Setting
+    // `is_remote` was the only mechanism the upstream protocol used to
+    // strip Mac identity; this test pins the local case so future
+    // changes don't accidentally strip legitimate local users.
+    let shell_ctx = vec![AIAgentContext::ExecutionEnvironment(
+        WarpAiExecutionContext {
+            os: WarpAiOsContext {
+                category: Some("darwin".to_string()),
+                distribution: Some("macOS 14.4".to_string()),
+            },
+            shell_name: "zsh".to_string(),
+            shell_version: Some("5.9".to_string()),
+        },
+    )];
+    let api_ctx = convert_context(&shell_ctx, /* is_remote */ false);
+    assert!(
+        api_ctx.shell.is_some(),
+        "local context preserves shell name (got {:?})",
+        api_ctx.shell,
+    );
+    assert!(
+        api_ctx.operating_system.is_some(),
+        "local context preserves OS info (got {:?})",
+        api_ctx.operating_system,
+    );
+}

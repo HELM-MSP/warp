@@ -4391,7 +4391,29 @@ impl Workspace {
                 pane_group.set_left_panel_open(true, ctx);
             }
             if let Some(binding) = helm_binding {
-                let title = binding.endpoint_friendly_label.clone();
+                // hw-ek5: render the title as `<friendly_label> · <hostname>`
+                // so the tab clearly belongs to an endpoint and not the local
+                // Mac shell underneath. The full endpoint identity (id, OS)
+                // lives in the tooltip; the title is the glanceable piece.
+                // The helper is pure so it is unit-tested independently of
+                // the freeze/title flow.
+                let title = match crate::server::server_api::helm_tab_binding::format_helm_tab_title(
+                    &binding.endpoint_friendly_label,
+                    &binding.endpoint_hostname,
+                ) {
+                    Some(t) => t,
+                    None => {
+                        // Should be impossible: a binding that passes
+                        // `freeze_remote` is non-blank in both fields. Log and
+                        // fall back to the label so the tab is still named.
+                        log::warn!(
+                            "helm-warp: binding for endpoint {} had blank label or hostname; \
+                             using label-only fallback",
+                            binding.endpoint_id,
+                        );
+                        binding.endpoint_friendly_label.clone()
+                    }
+                };
                 if let Err(error) = pane_group.freeze_helm_tab_binding(binding) {
                     log::warn!("helm-warp: failed to freeze tab binding: {error}");
                     return;

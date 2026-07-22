@@ -1372,7 +1372,13 @@ async fn route_to_helm_oz(
         // their own key, bypassing Warp's hosted multi-agent endpoint.
         if openrouter::is_openrouter_adapter_enabled() {
             log::info!("helm: routing multi-agent request to OpenRouter (BYOK adapter enabled)");
-            return openrouter::generate_helm_openrouter_output(&self.client, request).await;
+            // The adapter only sees BYOK users (no helm binding) on this
+            // branch, since the earlier `if let Some(binding)` early-
+            // returns above. We pass `is_helm_remote = false` so the
+            // adapter's redundant run_shell_command guard (hw-ek5) is a
+            // no-op for the local BYOK path while still being wired and
+            // exercised by tests.
+            return openrouter::generate_helm_openrouter_output(&self.client, request, false).await;
         }
 
         let auth_token = self

@@ -362,6 +362,13 @@ fn session_context_helm_predicates_reflect_each_lookup_state() {
         "ep-A"
     );
     assert!(bound.helm_tab_binding().unwrap().agent_token == "jwt-A");
+    // hw-ek5: helm_connection_state mirrors the slot's state at lookup time.
+    assert_eq!(
+        bound.helm_connection_state(),
+        Some(
+            crate::server::server_api::helm_tab_binding::HelmConnectionState::Connected
+        )
+    );
 
     // TerminalViewNotFound: NOT remote (we don't know what it is), IS
     // unresolved (request construction MUST fail closed).
@@ -403,4 +410,52 @@ fn session_context_found_bound_does_not_trigger_fail_closed() {
         !bound.has_unresolved_helm_binding_lookup(),
         "FoundBound has authoritative routing info; fail-closed must not fire"
     );
+}
+
+// hw-ek5: A found-bound tab whose connection state is Stale or
+// Disconnected MUST surface that fact through `helm_connection_state`
+// so the gating in `generate_multi_agent_output` can refuse the
+// request. The Connected path is exercised above.
+#[test]
+fn session_context_helm_connection_state_projects_through() {
+    use crate::server::server_api::helm_tab_binding::{
+        HelmConnectionState, HelmEndpointBinding,
+    };
+
+    let binding = HelmEndpointBinding::for_test(
+        "ep-A",
+        "laptop-A",
+        "laptop-a.local",
+        "macos",
+        "http://a.helm:18080",
+        "jwt-A",
+    );
+
+    let stale = SessionContext::new_with_helm_binding_and_state_for_test(
+        Arc::new(binding.clone()),
+        HelmConnectionState::Stale,
+    );
+    assert!(stale.is_helm_remote());
+    assert_eq!(stale.helm_connection_state(), Some(HelmConnectionState::Stale));
+
+    let disconnected = SessionContext::new_with_helm_binding_and_state_for_test(
+        Arc::new(binding.clone()),
+        HelmConnectionState::Disconnected,
+    );
+    assert!(disconnected.is_helm_remote());
+    assert_eq!(
+        disconnected.helm_connection_state(),
+        Some(HelmConnectionState::Disconnected)
+    );
+
+    // Unbound and missing-lookup tabs have no connection state — they
+    // never trip the gating check.
+    let unbound = SessionContext::new_with_helm_lookup_unbound_for_test();
+    assert_eq!(unbound.helm_connection_state(), None);
+    let missing = SessionContext::new_with_helm_lookup_not_found_for_test();
+    assert_eq!(missing.helm_connection_state(), None);
+
+    // No-lookup-at-all (from_session) is also None.
+    let no_lookup = SessionContext::new_for_test();
+    assert_eq!(no_lookup.helm_connection_state(), None);
 }

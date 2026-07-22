@@ -97,8 +97,11 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonE
 /// Three terminal states distinguish legitimate "no binding" from
 /// "we failed to find the view at all":
 ///
-/// * `FoundBound(binding)` — the owning PaneGroup exists AND has a
+/// * `FoundBound(binding, state)` — the owning PaneGroup exists AND has a
 ///   frozen remote binding. Requests must route only to that endpoint.
+///   `state` is the binding's connection state at the moment of lookup
+///   (Connected | Stale | Disconnected — hw-ek5). When `state` is not
+///   `Connected`, request construction must refuse to send.
 /// * `FoundUnbound` — the owning PaneGroup exists and has NO binding.
 ///   This is the legitimate "local tab" state and request construction
 ///   must proceed exactly as it did before hw-o8h.
@@ -108,7 +111,10 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonE
 ///   falling through to a local / OpenRouter / hosted route, since we
 ///   have no authoritative answer about what tab the request is for.
 pub(crate) enum HelmBindingLookup {
-    FoundBound(Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>),
+    FoundBound(
+        Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>,
+        crate::server::server_api::helm_tab_binding::HelmConnectionState,
+    ),
     FoundUnbound,
     TerminalViewNotFound,
 }
@@ -127,6 +133,10 @@ pub(crate) enum HelmBindingLookup {
 /// `terminal_view.id()` — but the broader iteration and the typed
 /// three-state return let the caller distinguish "local tab" from "we
 /// couldn't find the view, fail closed".
+///
+/// Reads the binding's connection state at the same instant (hw-ek5) so
+/// request construction and the routing layer cannot observe a divergence
+/// between binding identity and connection state.
 fn read_helm_tab_binding_for_view(
     terminal_view_id: EntityId,
     app: &AppContext,
@@ -140,7 +150,12 @@ fn read_helm_tab_binding_for_view(
                 if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app) {
                     if terminal_view.id() == terminal_view_id {
                         return match pane_group.helm_tab_binding() {
-                            Some(binding) => HelmBindingLookup::FoundBound(binding),
+                            Some(binding) => {
+                                let state = pane_group
+                                    .helm_tab_binding_slot()
+                                    .connection_state();
+                                HelmBindingLookup::FoundBound(binding, state)
+                            }
                             None => HelmBindingLookup::FoundUnbound,
                         };
                     }
@@ -159,13 +174,20 @@ fn read_helm_tab_binding_for_view(
 /// the terminal view at all, fail closed" without confusing them. The
 /// pre-hw-o8h `Option<Arc<HelmEndpointBinding>>` representation
 /// conflated those — see `HelmBindingLookup`.
+///
+/// `FoundBound` also carries the connection state read at lookup time
+/// (hw-ek5). The routing layer checks it; agents are not allowed to send
+/// to a stale or disconnected endpoint.
 #[derive(Debug, Clone)]
 pub(crate) enum HelmBindingStatus {
     /// We located the owning PaneGroup and found no binding installed.
     /// Legitimate local tab; existing pre-hw-o8h behavior applies.
     FoundUnbound,
     /// We located the owning PaneGroup and read its frozen binding.
-    FoundBound(Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>),
+    FoundBound(
+        Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>,
+        crate::server::server_api::helm_tab_binding::HelmConnectionState,
+    ),
     /// We could not locate the owning PaneGroup. Request construction
     /// must fail closed rather than silently fall through to a local /
     /// OpenRouter / hosted route.
@@ -221,7 +243,9 @@ impl SessionContext {
         let mut ctx = Self::from_session(session, app);
         if let Some(view_id) = terminal_view_id {
             ctx.helm_binding_status = Some(match read_helm_tab_binding_for_view(view_id, app) {
-                HelmBindingLookup::FoundBound(binding) => HelmBindingStatus::FoundBound(binding),
+                HelmBindingLookup::FoundBound(binding, state) => {
+                    HelmBindingStatus::FoundBound(binding, state)
+                }
                 HelmBindingLookup::FoundUnbound => HelmBindingStatus::FoundUnbound,
                 HelmBindingLookup::TerminalViewNotFound => {
                     HelmBindingStatus::TerminalViewNotFound
@@ -257,7 +281,23 @@ impl SessionContext {
         &self,
     ) -> Option<&Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>> {
         match &self.helm_binding_status {
-            Some(HelmBindingStatus::FoundBound(binding)) => Some(binding),
+            Some(HelmBindingStatus::FoundBound(binding, _state)) => Some(binding),
+            _ => None,
+        }
+    }
+
+    /// Connection state of the helm tab binding snapshot, captured at the
+    /// same instant as [`Self::helm_tab_binding`] (hw-ek5). `None` for
+    /// tabs without a binding (local / unbound) or callers that bypass
+    /// the per-tab lookup.
+    ///
+    /// When `Some` and not `Connected`, request construction must fail
+    /// closed — see [`crate::ai::agent::api::generate_multi_agent_output`].
+    pub fn helm_connection_state(
+        &self,
+    ) -> Option<crate::server::server_api::helm_tab_binding::HelmConnectionState> {
+        match &self.helm_binding_status {
+            Some(HelmBindingStatus::FoundBound(_binding, state)) => Some(*state),
             _ => None,
         }
     }
@@ -289,7 +329,7 @@ impl SessionContext {
     pub fn is_helm_remote(&self) -> bool {
         matches!(
             self.helm_binding_status,
-            Some(HelmBindingStatus::FoundBound(_))
+            Some(HelmBindingStatus::FoundBound(_, _))
         )
     }
 
@@ -348,11 +388,25 @@ impl SessionContext {
     pub fn new_with_helm_binding_for_test(
         binding: Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>,
     ) -> Self {
+        Self::new_with_helm_binding_and_state_for_test(
+            binding,
+            crate::server::server_api::helm_tab_binding::HelmConnectionState::Connected,
+        )
+    }
+
+    /// Test-only constructor that also lets the caller pin the connection
+    /// state (hw-ek5). Use this to exercise the stale / disconnected
+    /// gating in `generate_multi_agent_output`.
+    #[cfg(test)]
+    pub fn new_with_helm_binding_and_state_for_test(
+        binding: Arc<crate::server::server_api::helm_tab_binding::HelmEndpointBinding>,
+        state: crate::server::server_api::helm_tab_binding::HelmConnectionState,
+    ) -> Self {
         SessionContext {
             session_type: None,
             shell: None,
             current_working_directory: None,
-            helm_binding_status: Some(HelmBindingStatus::FoundBound(binding)),
+            helm_binding_status: Some(HelmBindingStatus::FoundBound(binding, state)),
         }
     }
 

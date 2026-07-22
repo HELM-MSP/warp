@@ -32,6 +32,35 @@ pub async fn generate_multi_agent_output(
         return Err(ConvertToAPITypeError::HelmTabLookupFailed);
     }
 
+    // hw-ek5 fail-closed state check: a helm bound tab whose connection
+    // state is Stale or Disconnected MUST NOT send the request —
+    // executing against an endpoint whose refresh loop has stopped would
+    // either send the JWT into the void (the Portal may have rotated it
+    // away) or hit an explicit disconnect. The operator must reopen the
+    // tab from `helm-warp://connect?...` to get a fresh binding.
+    //
+    // This MUST run before request construction / routing so a stale or
+    // disconnected tab never reaches OpenRouter, hosted, env-only
+    // helm_oz, or any local fallback — same fail-closed posture as
+    // `HelmTabLookupFailed` above.
+    if let (Some(binding), Some(state)) = (
+        params.session_context.helm_tab_binding(),
+        params.session_context.helm_connection_state(),
+    ) {
+        if !state.is_connected() {
+            log::warn!(
+                "helm: refusing request — helm tab binding for endpoint {} is in state '{}' \
+                 (must be 'connected' before agent requests can be sent; hw-ek5 fail-closed).",
+                binding.endpoint_id,
+                state.label(),
+            );
+            return Err(ConvertToAPITypeError::HelmTabNotConnected {
+                endpoint_id: binding.endpoint_id.clone(),
+                state: state.label().to_string(),
+            });
+        }
+    }
+
     let supported_tools = params
         .supported_tools_override
         .take()

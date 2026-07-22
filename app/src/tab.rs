@@ -311,8 +311,25 @@ impl TabData {
         let pane_group = self.pane_group.as_ref(ctx);
         let mut menu_items = vec![];
         let tab_title = Self::copyable_metadata_value(Some(pane_group.display_title(ctx)));
+        // hw-ek5: copy-menu also exposes the endpoint identity so a user
+        // sharing a screenshot / chat log can paste the binding id alongside
+        // the tab title. Local / unbound tabs get no extra items — the copy
+        // menu shape stays the same as before this change.
+        let helm_identity = pane_group.helm_tab_binding();
         if !uses_vertical_tabs(ctx) {
             Self::push_copy_metadata_menu_item(&mut menu_items, "Copy tab title", tab_title);
+            if let Some(binding) = helm_identity.as_ref() {
+                Self::push_copy_metadata_menu_item(
+                    &mut menu_items,
+                    "Copy endpoint id",
+                    Self::copyable_metadata_value(Some(binding.endpoint_id.clone())),
+                );
+                Self::push_copy_metadata_menu_item(
+                    &mut menu_items,
+                    "Copy endpoint label",
+                    Self::copyable_metadata_value(Some(binding.endpoint_friendly_label.clone())),
+                );
+            }
             return menu_items;
         }
 
@@ -370,6 +387,21 @@ impl TabData {
             );
         } else {
             Self::push_copy_metadata_menu_item(&mut menu_items, title_label, title);
+        }
+
+        // hw-ek5: append endpoint identity after the standard items so the
+        // vertical tab copy-menu shape stays the same for local tabs.
+        if let Some(binding) = helm_identity.as_ref() {
+            Self::push_copy_metadata_menu_item(
+                &mut menu_items,
+                "Copy endpoint id",
+                Self::copyable_metadata_value(Some(binding.endpoint_id.clone())),
+            );
+            Self::push_copy_metadata_menu_item(
+                &mut menu_items,
+                "Copy endpoint label",
+                Self::copyable_metadata_value(Some(binding.endpoint_friendly_label.clone())),
+            );
         }
 
         menu_items
@@ -676,6 +708,15 @@ enum Indicator {
         conversation_status: Option<ConversationStatus>,
     },
     AmbientAgent,
+    /// Tab is bound to a remote Helm endpoint (hw-ek5). The connection
+    /// state drives the chip — `Connected` shows the existing
+    /// `Synced`/"linked" glyph, `Stale` and `Disconnected` show the
+    /// `Error` glyph. Tooltip / copy-tab-name paths consult the
+    /// `HelmTabBinding` directly so the endpoint identity is always
+    /// surfaced.
+    HelmRemote {
+        connection_state: crate::server::server_api::helm_tab_binding::HelmConnectionState,
+    },
 }
 
 impl From<TerminalViewState> for Indicator {
@@ -708,6 +749,11 @@ pub struct TabComponent<'a> {
     tooltip_git_branch: Option<String>,
     is_drag_target: bool,
     background_opacity: u8,
+    /// Precomputed helm endpoint identity (label · hostname, id, OS,
+    /// connection state). Empty for non-helm tabs. Used by the helm
+    /// indicator's hover tooltip (hw-ek5) — precomputed because the
+    /// chip rendering path has no `AppContext` in scope.
+    helm_tooltip_text: String,
     /// Set to `true` when this `TabComponent` is being rendered inside the
     /// floating chip overlay used during a cross-window tab drag. In that
     /// mode `build()` skips the outer `SavePosition`, `Draggable`, and
@@ -825,12 +871,35 @@ impl<'a> TabComponent<'a> {
         let is_maximized = tab.pane_group.as_ref(ctx).is_focused_pane_maximized(ctx);
         let shell_indicator_type = tab.pane_group.as_ref(ctx).focused_shell_indicator_type(ctx);
 
+        // hw-ek5: a helm-bound tab always surfaces its endpoint identity.
+        // We pick the indicator before the other gating because the user
+        // has explicitly opened this tab against a remote endpoint and
+        // needs to see whether it is still reachable. The connection
+        // state drives the visual chip; the tooltip / copy-name path
+        // (below) pulls the actual id/os from the binding.
+        let helm_indicator = if tab
+            .pane_group
+            .as_ref(ctx)
+            .is_helm_remote()
+        {
+            Some(Indicator::HelmRemote {
+                connection_state: tab
+                    .pane_group
+                    .as_ref(ctx)
+                    .helm_connection_state(),
+            })
+        } else {
+            None
+        };
+
         // If a session is being shared, we want to show that indicator in the tab bar above all else.
         // Otherwise, if the tab indicator setting is explicitly turned off, we don't want to show any indicator.
         // But if it's on, we want to show the synced indicator if this tab is being synced.
         // If we aren't showing the synced indicator (and we know the setting is on),
         // we will show long-running, error indicators, etc. as applicable.
-        let indicator = if active_pane_is_ambient_agent_session {
+        let indicator = if let Some(helm) = helm_indicator {
+            helm
+        } else if active_pane_is_ambient_agent_session {
             Indicator::AmbientAgent
         } else if active_pane_has_unsaved_code_changes {
             Indicator::UnsavedChanges
@@ -855,6 +924,12 @@ impl<'a> TabComponent<'a> {
         let tooltip_message = Self::get_tooltip_message(&indicator, tab, ctx);
         let tooltip_directory = Self::get_tooltip_directory(&indicator, tab, ctx);
         let tooltip_git_branch = Self::get_tooltip_git_branch(&indicator, tab, ctx);
+        let helm_tooltip_text = tab
+            .pane_group
+            .as_ref(ctx)
+            .helm_tooltip_lines()
+            .map(|lines| lines.join("\n"))
+            .unwrap_or_default();
         let window_id = tab.pane_group.window_id(ctx);
         let background_opacity = WindowSettings::as_ref(ctx)
             .background_opacity
@@ -877,6 +952,7 @@ impl<'a> TabComponent<'a> {
             tooltip_git_branch,
             is_drag_target,
             background_opacity,
+            helm_tooltip_text,
             for_drag_ghost: false,
         }
     }
@@ -1274,6 +1350,54 @@ impl<'a> TabComponent<'a> {
                         if state.is_hovered() {
                             let tooltip = ui_builder
                                 .tool_tip("Cloud agent run".to_string())
+                                .build()
+                                .finish();
+                            stack.add_positioned_overlay_child(
+                                tooltip,
+                                OffsetPositioning::offset_from_parent(
+                                    vec2f(0., 3.),
+                                    ParentOffsetBounds::WindowByPosition,
+                                    ParentAnchor::BottomMiddle,
+                                    ChildAnchor::TopMiddle,
+                                ),
+                            );
+                        }
+
+                        stack.finish()
+                    })
+                    .finish(),
+                )
+            }
+            Indicator::HelmRemote { connection_state } => {
+                // hw-ek5: surface the helm binding state as a chip. When
+                // the binding is Connected we reuse the existing
+                // `synced_input_indicator_color` so the icon blends with
+                // the user's existing visual vocabulary; Stale and
+                // Disconnected use the error color so the operator
+                // notices the degradation at a glance. The full
+                // endpoint identity (id, OS, label, hostname, state)
+                // lives in the tooltip — precomputed on `Self` because
+                // `render_indicator` does not have an `AppContext` in
+                // scope.
+                let icon_color = if connection_state.is_connected() {
+                    self.styles.synced_input_indicator_color.into()
+                } else {
+                    self.styles.error_color.into()
+                };
+                let ui_builder = self.ui_builder.clone();
+                let mouse_state = self.tab.indicator_hover_state.clone();
+                let tooltip_text = self.helm_tooltip_text.clone();
+                Some(
+                    Hoverable::new(mouse_state, move |state| {
+                        let mut stack = Stack::new().with_child(
+                            Icon::LinkHorizontal
+                                .to_warpui_icon(icon_color)
+                                .finish(),
+                        );
+
+                        if state.is_hovered() && !tooltip_text.is_empty() {
+                            let tooltip = ui_builder
+                                .tool_tip(tooltip_text.clone())
                                 .build()
                                 .finish();
                             stack.add_positioned_overlay_child(

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::server::server_api::helm_tab_binding::{
-    self, EndpointIdentity, HelmEndpointBinding, HelmTabBinding,
+    self, EndpointIdentity, HelmConnectionState, HelmEndpointBinding, HelmTabBinding,
 };
 use crate::workspace::{HelmExchangeCode, WorkspaceAction};
 
@@ -272,6 +272,11 @@ pub fn decide_refresh_action(
 /// This is the only place where `try_refresh_token` is called — keeping it
 /// here means the slot-level same-endpoint guard is the single source of
 /// truth (it enforces the contract regardless of which caller reaches in).
+///
+/// Side effect (hw-ek5): on a successful same-endpoint rotation the slot's
+/// connection state is reset to `Connected` (via `try_refresh_token`).
+/// Otherwise the loop should be considered stopped because the binding is
+/// no longer trustworthy and the next refresh is unlikely to succeed.
 pub fn apply_refresh_to_slot(
     slot: &HelmTabBinding,
     frozen: &EndpointIdentity,
@@ -285,9 +290,28 @@ pub fn apply_refresh_to_slot(
         RefreshDecision::Rotate { fresh_agent_token } => slot
             .try_refresh_token(frozen, &fresh_agent_token)
             .is_ok(),
-        RefreshDecision::DifferentEndpoint { .. } => false,
-        RefreshDecision::MalformedResponse { .. } => false,
+        RefreshDecision::DifferentEndpoint { .. } => {
+            // Mark stale and refuse: the portal is minting a token for a
+            // different endpoint, which violates the immutable binding
+            // contract. The loop will stop after this returns.
+            slot.set_connection_state(HelmConnectionState::Stale);
+            false
+        }
+        RefreshDecision::MalformedResponse { .. } => {
+            slot.set_connection_state(HelmConnectionState::Stale);
+            false
+        }
     }
+}
+
+/// Mark the slot's connection state as [`HelmConnectionState::Stale`] and
+/// return. Called from the background refresh chain whenever the loop
+/// reaches a stop condition that doesn't involve a Portal response
+/// (HTTP non-success body, parse failure, client build failure). The loop
+/// continues to retry transport-only failures (`Http`) without marking
+/// stale because those are network blips, not endpoint state.
+pub fn mark_slot_stale(slot: &HelmTabBinding) {
+    slot.set_connection_state(HelmConnectionState::Stale);
 }
 
 // =============================================================================
@@ -388,7 +412,11 @@ pub fn start_helm_refresh_loop(
                     use RefreshStepError::*;
                     match error {
                         Http(_) => {
-                            // Transient — retry next cycle.
+                            // Transient transport blip — retry next cycle.
+                            // Do not flip connection state; the loop will
+                            // either succeed later (and stay Connected)
+                            // or hit a non-transient failure (which will
+                            // mark Stale in its own branch).
                             log::warn!(
                                 "helm-warp: refresh HTTP failed for endpoint {endpoint_id}; retrying next cycle"
                             );
@@ -398,18 +426,21 @@ pub fn start_helm_refresh_loop(
                             );
                         }
                         HttpStatus(status) => {
+                            mark_slot_stale(pane_group.helm_tab_binding_slot());
                             log::warn!(
-                                "helm-warp: refresh returned {status} for endpoint {endpoint_id}; stopping loop"
+                                "helm-warp: refresh returned {status} for endpoint {endpoint_id}; stopping loop (slot marked Stale)"
                             );
                         }
                         Parse(e) => {
+                            mark_slot_stale(pane_group.helm_tab_binding_slot());
                             log::warn!(
-                                "helm-warp: refresh response unparseable for endpoint {endpoint_id}: {e:?}; stopping loop"
+                                "helm-warp: refresh response unparseable for endpoint {endpoint_id}: {e:?}; stopping loop (slot marked Stale)"
                             );
                         }
                         ClientBuild(e) => {
+                            mark_slot_stale(pane_group.helm_tab_binding_slot());
                             log::warn!(
-                                "helm-warp: refresh client build failed for endpoint {endpoint_id}: {e:?}; stopping loop"
+                                "helm-warp: refresh client build failed for endpoint {endpoint_id}: {e:?}; stopping loop (slot marked Stale)"
                             );
                         }
                     }
@@ -598,6 +629,84 @@ mod tests {
         } else {
             panic!("expected MalformedResponse");
         }
+    }
+
+    // ---- mark_slot_stale ----
+
+    #[test]
+    fn mark_slot_stale_sets_state() {
+        let slot = HelmTabBinding::new();
+        assert_eq!(slot.connection_state(), HelmConnectionState::Connected);
+        mark_slot_stale(&slot);
+        assert_eq!(slot.connection_state(), HelmConnectionState::Stale);
+    }
+
+    #[test]
+    fn apply_refresh_rotation_clears_prior_stale_state() {
+        // The refresh loop may have previously observed a stale condition
+        // and stopped; a fresh, valid refresh must reset state to
+        // Connected so the next request is allowed through.
+        let slot = HelmTabBinding::new();
+        slot.freeze_remote(complete_response_binding()).unwrap();
+        slot.set_connection_state(HelmConnectionState::Stale);
+        assert_eq!(slot.connection_state(), HelmConnectionState::Stale);
+
+        let resp = RefreshResponse {
+            agent_token: "jwt-NEW".to_string(),
+            endpoint_id: Some("ep-A".to_string()),
+        };
+        let continued = apply_refresh_to_slot(&slot, &identity_a(), &resp);
+        assert!(continued);
+        assert_eq!(slot.connection_state(), HelmConnectionState::Connected);
+    }
+
+    #[test]
+    fn apply_refresh_different_endpoint_marks_stale() {
+        let slot = HelmTabBinding::new();
+        slot.freeze_remote(complete_response_binding()).unwrap();
+
+        let resp = RefreshResponse {
+            agent_token: "jwt-NEW".to_string(),
+            endpoint_id: Some("ep-OTHER".to_string()),
+        };
+        let continued = apply_refresh_to_slot(&slot, &identity_a(), &resp);
+        assert!(!continued, "refused by decide_refresh_action");
+        assert_eq!(
+            slot.connection_state(),
+            HelmConnectionState::Stale,
+            "DifferentEndpoint must mark the slot Stale so the next request is refused (hw-ek5)"
+        );
+        // The binding is untouched.
+        assert_eq!(slot.get().unwrap().agent_token, "jwt-A");
+    }
+
+    #[test]
+    fn apply_refresh_malformed_response_marks_stale() {
+        let slot = HelmTabBinding::new();
+        slot.freeze_remote(complete_response_binding()).unwrap();
+
+        let resp = RefreshResponse {
+            agent_token: "   ".to_string(),
+            endpoint_id: Some("ep-A".to_string()),
+        };
+        let continued = apply_refresh_to_slot(&slot, &identity_a(), &resp);
+        assert!(!continued);
+        assert_eq!(slot.connection_state(), HelmConnectionState::Stale);
+        assert_eq!(slot.get().unwrap().agent_token, "jwt-A", "untouched");
+    }
+
+    #[test]
+    fn apply_refresh_missing_endpoint_id_marks_stale() {
+        let slot = HelmTabBinding::new();
+        slot.freeze_remote(complete_response_binding()).unwrap();
+
+        let resp = RefreshResponse {
+            agent_token: "jwt-NEW".to_string(),
+            endpoint_id: None,
+        };
+        let continued = apply_refresh_to_slot(&slot, &identity_a(), &resp);
+        assert!(!continued);
+        assert_eq!(slot.connection_state(), HelmConnectionState::Stale);
     }
 
     // ---- apply_refresh_to_slot ----

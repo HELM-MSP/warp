@@ -37,7 +37,7 @@ use crate::quit_warning::UnsavedStateSummary;
 #[cfg(target_family = "wasm")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::helm_tab_binding::{
-    BindingError, EndpointIdentity, HelmEndpointBinding, HelmTabBinding,
+    BindingError, EndpointIdentity, HelmConnectionState, HelmEndpointBinding, HelmTabBinding,
 };
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
@@ -5523,6 +5523,42 @@ impl PaneGroup {
     /// terminal session being a local Mac shell.
     pub fn is_helm_remote(&self) -> bool {
         self.helm_tab_binding.is_remote()
+    }
+
+    /// Connection state of this tab's helm binding. `Connected` is the
+    /// default for a fresh binding; the refresh loop mutates it to
+    /// `Stale` when a refresh step reaches a stop condition. Callers
+    /// reading this for "should I send?" semantics should consult
+    /// [`crate::ai::agent::api::convert_to::ConvertToAPITypeError`]
+    /// path — UI callers can render the value as-is.
+    pub fn helm_connection_state(&self) -> HelmConnectionState {
+        self.helm_tab_binding.connection_state()
+    }
+
+    /// Multi-line endpoint identity used in tooltips and the agent view
+    /// header (hw-ek5). Each line is independently meaningful:
+    /// * line 1 — friendly label + hostname (same as the tab title)
+    /// * line 2 — endpoint id (the stable binding key)
+    /// * line 3 — endpoint OS (so the user knows where execution happens)
+    /// * line 4 — connection state label (`connected` / `stale` /
+    ///   `disconnected`)
+    ///
+    /// Returns `None` for a local / unbound tab — those keep their
+    /// existing tooltip shape.
+    pub fn helm_tooltip_lines(&self) -> Option<Vec<String>> {
+        let binding = self.helm_tab_binding.get()?;
+        let state = self.helm_tab_binding.connection_state();
+        let title = crate::server::server_api::helm_tab_binding::format_helm_tab_title(
+            &binding.endpoint_friendly_label,
+            &binding.endpoint_hostname,
+        )
+        .unwrap_or_else(|| binding.endpoint_friendly_label.clone());
+        Some(vec![
+            title,
+            format!("endpoint id: {}", binding.endpoint_id),
+            format!("endpoint os: {}", binding.endpoint_os),
+            format!("connection: {}", state.label()),
+        ])
     }
 
     /// Freeze a remote binding on this tab. Called exactly once at tab

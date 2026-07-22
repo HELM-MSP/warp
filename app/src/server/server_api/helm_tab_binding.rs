@@ -124,6 +124,49 @@ impl HelmEndpointBinding {
     }
 }
 
+/// Connection state of a Helm endpoint binding.
+///
+/// The state is tracked per-tab on the owning `HelmTabBinding` slot so the
+/// refresh loop, request router, and tab UI all read the same value for the
+/// same tab — there is no process-global counter.
+///
+/// * `Connected` — the most-recent refresh succeeded, OR no refresh has run
+///   yet (a fresh binding is trusted at `freeze_remote` time; refresh has
+///   not contradicted that trust).
+/// * `Stale` — the refresh loop reached a stop condition: the Portal
+///   returned a non-success status, a different endpoint, or a malformed
+///   payload. The binding is still installed locally but the next JWT
+///   rotation did not land; the agent executor must refuse to send the
+///   next request until the operator reconnects (hw-ek5).
+/// * `Disconnected` — the endpoint sent an explicit disconnect (for
+///   example a `RemoteDisconnected` push from the Portal). No automatic
+///   recovery — the tab stays disconnected until the user opens a new
+///   tab from `helm-warp://connect?...`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HelmConnectionState {
+    #[default]
+    Connected,
+    Stale,
+    Disconnected,
+}
+
+impl HelmConnectionState {
+    /// `true` iff the binding can carry traffic. `Stale` and `Disconnected`
+    /// both refuse — see [`crate::ai::agent::api::generate_multi_agent_output`].
+    pub fn is_connected(self) -> bool {
+        matches!(self, HelmConnectionState::Connected)
+    }
+
+    /// Short label used in tab tooltips and the AI block header.
+    pub fn label(self) -> &'static str {
+        match self {
+            HelmConnectionState::Connected => "connected",
+            HelmConnectionState::Stale => "stale",
+            HelmConnectionState::Disconnected => "disconnected",
+        }
+    }
+}
+
 /// Per-tab binding: holds zero or one `HelmEndpointBinding` behind a
 /// parking_lot RwLock so the refresh loop can swap tokens atomically
 /// without disturbing existing readers.
@@ -131,9 +174,14 @@ impl HelmEndpointBinding {
 /// The slot itself is the storage; no process-global map is consulted at
 /// request-routing time. Routing reads only what the owning PaneGroup
 /// stores on this slot.
+///
+/// The slot also tracks the most recent [`HelmConnectionState`] observed
+/// by the refresh loop. `freeze_remote` installs `Connected`; the refresh
+/// loop updates this state at every step (see `crate::uri::helm_warp`).
 #[derive(Debug, Default)]
 pub struct HelmTabBinding {
     inner: RwLock<Option<Arc<HelmEndpointBinding>>>,
+    connection_state: RwLock<HelmConnectionState>,
 }
 
 impl HelmTabBinding {
@@ -151,17 +199,40 @@ impl HelmTabBinding {
         self.inner.read().is_some()
     }
 
+    /// Returns the most recent connection state observed by the refresh
+    /// loop. Defaults to `Connected` for a fresh binding. When the tab is
+    /// not remote (`is_remote() == false`) callers should not rely on
+    /// this — the state is meaningful only when a binding is installed.
+    pub fn connection_state(&self) -> HelmConnectionState {
+        *self.connection_state.read()
+    }
+
+    /// Set the connection state explicitly. Used by the refresh loop in
+    /// `crate::uri::helm_warp` and by the future explicit-disconnect path.
+    pub fn set_connection_state(&self, state: HelmConnectionState) {
+        *self.connection_state.write() = state;
+    }
+
     /// Freeze a remote binding onto a tab. Called exactly once at
     /// tab-open time, immediately after the launch.json / exchange has
     /// produced a valid `HelmEndpointBinding`. Calling twice on the same
     /// tab returns [`BindingError::AlreadyFrozen`] so the caller surfaces
     /// the violation instead of silently overwriting.
+    ///
+    /// `freeze_remote` resets the connection state to `Connected` — at
+    /// freeze time we have just minted a fresh JWT from the portal
+    /// exchange and have not yet contradicted that trust.
     pub fn freeze_remote(&self, binding: HelmEndpointBinding) -> Result<(), BindingError> {
         let mut guard = self.inner.write();
         if guard.is_some() {
             return Err(BindingError::AlreadyFrozen);
         }
         *guard = Some(Arc::new(binding));
+        drop(guard);
+        // Reset connection state in a separate critical section so we don't
+        // hold two locks at once (rustc's `clippy::await_holding_lock` would
+        // never apply here, but the lock discipline is the same).
+        *self.connection_state.write() = HelmConnectionState::Connected;
         Ok(())
     }
 
@@ -213,6 +284,11 @@ impl HelmTabBinding {
         let mut next = (**existing).clone();
         next.agent_token = fresh_token.to_string();
         *guard = Some(Arc::new(next));
+        drop(guard);
+        // A successful same-endpoint JWT rotation confirms the endpoint is
+        // still connected from our perspective; reset any prior Stale flag
+        // the refresh loop may have parked here.
+        *self.connection_state.write() = HelmConnectionState::Connected;
         Ok(())
     }
 
@@ -220,6 +296,8 @@ impl HelmTabBinding {
     pub fn clear(&self) {
         let mut guard = self.inner.write();
         *guard = None;
+        drop(guard);
+        *self.connection_state.write() = HelmConnectionState::Connected;
     }
 }
 
@@ -318,6 +396,25 @@ fn take(field: Option<&str>, name: &'static str, missing: &mut Vec<&'static str>
             String::new()
         }
     }
+}
+
+/// Format the helm tab title as `<friendly_label> · <hostname>` (hw-ek5).
+///
+/// Pure: produces the same string for the same inputs, regardless of
+/// connection state, so it can be unit tested without a `HelmTabBinding`.
+///
+/// Returns `None` for a binding missing either input — callers should
+/// not set a helm title without those fields.
+pub fn format_helm_tab_title(
+    friendly_label: &str,
+    hostname: &str,
+) -> Option<String> {
+    let label = friendly_label.trim();
+    let host = hostname.trim();
+    if label.is_empty() || host.is_empty() {
+        return None;
+    }
+    Some(format!("{label} · {host}"))
 }
 
 #[cfg(test)]
@@ -517,6 +614,137 @@ mod tests {
         assert!(!slot.is_remote());
         slot.clear();
         assert!(!slot.is_remote());
+    }
+
+    #[test]
+    fn connection_state_defaults_to_connected() {
+        let slot = HelmTabBinding::new();
+        assert_eq!(slot.connection_state(), HelmConnectionState::Connected);
+    }
+
+    #[test]
+    fn connection_state_label_is_stable() {
+        assert_eq!(HelmConnectionState::Connected.label(), "connected");
+        assert_eq!(HelmConnectionState::Stale.label(), "stale");
+        assert_eq!(HelmConnectionState::Disconnected.label(), "disconnected");
+    }
+
+    #[test]
+    fn connection_state_is_connected_only_for_connected() {
+        assert!(HelmConnectionState::Connected.is_connected());
+        assert!(!HelmConnectionState::Stale.is_connected());
+        assert!(!HelmConnectionState::Disconnected.is_connected());
+    }
+
+    #[test]
+    fn freeze_remote_resets_state_to_connected() {
+        let slot = HelmTabBinding::new();
+        slot.set_connection_state(HelmConnectionState::Stale);
+        assert_eq!(slot.connection_state(), HelmConnectionState::Stale);
+
+        slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
+        // Freeze wins: the new binding has a fresh JWT and is trusted
+        // (hw-ek5). The pre-existing Stale flag must be cleared.
+        assert_eq!(slot.connection_state(), HelmConnectionState::Connected);
+    }
+
+    #[test]
+    fn refresh_token_success_resets_state_to_connected() {
+        let slot = HelmTabBinding::new();
+        slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
+        slot.set_connection_state(HelmConnectionState::Stale);
+
+        slot.try_refresh_token(&identity_for_full_args(), "jwt-NEW")
+            .unwrap();
+
+        // Same-endpoint token rotation succeeded — endpoint is back.
+        assert_eq!(slot.connection_state(), HelmConnectionState::Connected);
+    }
+
+    #[test]
+    fn refresh_token_failure_does_not_reset_state() {
+        let slot = HelmTabBinding::new();
+        slot.freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
+        slot.set_connection_state(HelmConnectionState::Stale);
+
+        // Refresh refused (different endpoint) — connection state stays
+        // whatever the refresh loop set last.
+        let err = slot
+            .try_refresh_token(&identity_other(), "jwt-NEW")
+            .unwrap_err();
+        assert!(matches!(err, BindingError::EndpointMismatch { .. }));
+        assert_eq!(slot.connection_state(), HelmConnectionState::Stale);
+    }
+
+    #[test]
+    fn clear_resets_state_to_connected() {
+        let slot = HelmTabBinding::new();
+        slot.set_connection_state(HelmConnectionState::Disconnected);
+        slot.clear();
+        assert_eq!(slot.connection_state(), HelmConnectionState::Connected);
+    }
+
+    #[test]
+    fn two_simultaneous_slots_have_independent_states() {
+        // A/B isolation extends to connection state — refreshing A must
+        // not flip B's state, and freezing on one slot does not touch the
+        // other.
+        let slot_a = HelmTabBinding::new();
+        let slot_b = HelmTabBinding::new();
+        slot_b.set_connection_state(HelmConnectionState::Stale);
+
+        slot_a
+            .freeze_remote(freeze_remote_from_tuple(full_args()).unwrap())
+            .unwrap();
+        assert_eq!(slot_a.connection_state(), HelmConnectionState::Connected);
+        assert_eq!(
+            slot_b.connection_state(),
+            HelmConnectionState::Stale,
+            "B's state untouched"
+        );
+
+        slot_a.set_connection_state(HelmConnectionState::Stale);
+        assert_eq!(
+            slot_b.connection_state(),
+            HelmConnectionState::Stale,
+            "B unchanged after A's transition"
+        );
+    }
+
+    // ---- format_helm_tab_title (hw-ek5) ----
+
+    #[test]
+    fn format_helm_tab_title_combines_label_and_hostname() {
+        let title = format_helm_tab_title("operator-laptop", "laptop.local")
+            .expect("both inputs non-blank");
+        assert_eq!(title, "operator-laptop · laptop.local");
+    }
+
+    #[test]
+    fn format_helm_tab_title_trims_whitespace() {
+        let title = format_helm_tab_title("  laptop  ", "  laptop.local  ")
+            .expect("trims to non-empty");
+        assert_eq!(title, "laptop · laptop.local");
+    }
+
+    #[test]
+    fn format_helm_tab_title_returns_none_for_empty_label() {
+        assert!(format_helm_tab_title("", "laptop.local").is_none());
+        assert!(format_helm_tab_title("   ", "laptop.local").is_none());
+    }
+
+    #[test]
+    fn format_helm_tab_title_returns_none_for_empty_hostname() {
+        assert!(format_helm_tab_title("laptop", "").is_none());
+        assert!(format_helm_tab_title("laptop", "   ").is_none());
+    }
+
+    #[test]
+    fn format_helm_tab_title_returns_none_for_both_blank() {
+        assert!(format_helm_tab_title("", "").is_none());
     }
 
     #[test]

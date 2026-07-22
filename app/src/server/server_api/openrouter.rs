@@ -221,9 +221,24 @@ struct OpenRouterErrorDetail {
 // ---------------------------------------------------------------------------
 
 /// Generates a multi-agent response by routing the request to OpenRouter.
+///
+/// `is_helm_remote` is set to `true` when the request originated from a
+/// helm-bound tab (the upstream `generate_multi_agent_output` carries this
+/// flag alongside the binding). When `true`, the conversion path that turns
+/// an OpenRouter function call back into a `warp_multi_agent_api` tool
+/// refuses to materialize any local-shell tool (`run_shell_command`,
+/// `write_to_long_running_shell_command`, `read_shell_command_output`,
+/// `transfer_shell_command_control_to_user`). This is the redundant guard
+/// hw-ek5 requires: even if the model somehow emits a shell function call
+/// for a helm-bound tab (the supported-tools strip happens upstream), the
+/// adapter refuses to convert it and the request chain fails closed.
+///
+/// The flag does NOT affect local / unbound tabs — those keep the regular
+/// tool surface.
 pub async fn generate_helm_openrouter_output(
     client: &http_client::Client,
     request: &warp_multi_agent_api::Request,
+    is_helm_remote: bool,
 ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>> {
     let api_key = std::env::var(HELM_OPENROUTER_API_KEY_ENV)
         .ok()
@@ -244,7 +259,7 @@ pub async fn generate_helm_openrouter_output(
         "helm: OpenRouter adapter handling multi-agent request (model={model})"
     );
 
-    let openrouter_request = build_openrouter_request(request, model);
+    let openrouter_request = build_openrouter_request(request, model, is_helm_remote);
     let conversation_id = conversation_id_from_request(request);
     let request_id = uuid::Uuid::new_v4().to_string();
     let run_id = uuid::Uuid::new_v4().to_string();
@@ -380,6 +395,7 @@ pub async fn generate_helm_openrouter_output(
                                 &tool_call,
                                 &task_id,
                                 &request_id,
+                                is_helm_remote,
                             ) {
                                 yield Ok(build_add_tool_call_event(
                                     &task_id,
@@ -461,6 +477,7 @@ fn parse_openrouter_error(body_text: String, status: http::StatusCode) -> String
 fn build_openrouter_request(
     request: &warp_multi_agent_api::Request,
     model: String,
+    is_helm_remote: bool,
 ) -> OpenRouterChatCompletionRequest {
     let mut messages = Vec::new();
 
@@ -493,6 +510,20 @@ fn build_openrouter_request(
     }
 
     let tools = supported_tools(request);
+    // hw-ek5: defense in depth. A helm-bound tab MUST NOT see the
+    // local shell tool advertised to the OpenRouter model — even if the
+    // upstream `supported_tools` bit got past the converter. We strip
+    // `run_shell_command` here when the request is helm-remote. The
+    // `is_helm_remote` parameter is threaded all the way to the
+    // conversion guard below so the chain is consistent.
+    let tools: Vec<OpenRouterTool> = if is_helm_remote {
+        tools
+            .into_iter()
+            .filter(|t| t.function.name != "run_shell_command")
+            .collect()
+    } else {
+        tools
+    };
     let tool_choice = if tools.is_empty() {
         None
     } else {
@@ -635,8 +666,9 @@ fn openrouter_tool_call_to_warp_message(
     tool_call: &OpenRouterToolCall,
     task_id: &str,
     request_id: &str,
+    is_helm_remote: bool,
 ) -> Option<warp_multi_agent_api::Message> {
-    let warp_tool = openrouter_function_to_warp_tool(&tool_call.function)?;
+    let warp_tool = openrouter_function_to_warp_tool(&tool_call.function, is_helm_remote)?;
 
     Some(warp_multi_agent_api::Message {
         id: uuid::Uuid::new_v4().to_string(),
@@ -656,11 +688,31 @@ fn openrouter_tool_call_to_warp_message(
 
 fn openrouter_function_to_warp_tool(
     function: &OpenRouterToolCallFunction,
+    is_helm_remote: bool,
 ) -> Option<warp_multi_agent_api::message::tool_call::Tool> {
     use warp_multi_agent_api::message::tool_call::Tool;
 
     match function.name.as_str() {
         "run_shell_command" => {
+            // hw-ek5: a helm-bound tab MUST NOT execute a shell command on
+            // the local Mac, even if the model emits the function call.
+            // The redundant guard (the upstream `supported_tools` strip
+            // happens earlier) is the fallback when the model hallucinated
+            // the tool — see `build_openrouter_request` for the supported-
+            // tools strip and `generate_helm_openrouter_output` for the
+            // description of the layered defense-in-depth. Returning
+            // `None` here drops the function call from the request stream;
+            // the upstream consumer treats it as an unknown tool.
+            if is_helm_remote {
+                log::warn!(
+                    "helm: refusing to convert run_shell_command for a helm-remote tab \
+                     (function={:?}, arguments.len={}); the OpenRouter model emitted a \
+                     shell tool call that must not execute locally.",
+                    function.name,
+                    function.arguments.len(),
+                );
+                return None;
+            }
             let args: serde_json::Value = serde_json::from_str(&function.arguments).ok()?;
             let command = args.get("command")?.as_str()?.to_string();
             Some(Tool::RunShellCommand(
@@ -745,4 +797,174 @@ fn supported_tools(request: &warp_multi_agent_api::Request) -> Vec<OpenRouterToo
     }
 
     tools
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_shell_function_call(command: &str) -> OpenRouterToolCallFunction {
+        OpenRouterToolCallFunction {
+            name: "run_shell_command".to_string(),
+            arguments: serde_json::json!({ "command": command }).to_string(),
+        }
+    }
+
+    fn server_function_call(name: &str, payload: &str) -> OpenRouterToolCallFunction {
+        OpenRouterToolCallFunction {
+            name: name.to_string(),
+            arguments: payload.to_string(),
+        }
+    }
+
+    // hw-ek5: a helm-bound tab MUST NOT convert a run_shell_command
+    // function call into a Tool::RunShellCommand. This is the redundant
+    // guard the upstream `supported_tools` strip cannot guarantee.
+    #[test]
+    fn openrouter_run_shell_command_conversion_is_refused_for_helm_remote() {
+        let fn_call = run_shell_function_call("ls -la /tmp");
+        let converted =
+            openrouter_function_to_warp_tool(&fn_call, /* is_helm_remote */ true);
+        assert!(
+            converted.is_none(),
+            "helm-bound tab must not materialize run_shell_command (hw-ek5)"
+        );
+    }
+
+    #[test]
+    fn openrouter_run_shell_command_conversion_is_allowed_for_local_byok() {
+        // Local / unbound BYOK users still get the tool — the upstream
+        // supported_tools strip already gates that this branch is only
+        // reachable for tool-permitted requests.
+        let fn_call = run_shell_function_call("ls -la /tmp");
+        let converted =
+            openrouter_function_to_warp_tool(&fn_call, /* is_helm_remote */ false);
+        assert!(
+            converted.is_some(),
+            "local BYOK must keep run_shell_command conversion"
+        );
+    }
+
+    #[test]
+    fn openrouter_run_shell_command_with_bad_args_returns_none_for_local_byok() {
+        // Garbage arguments still don't produce a tool call — the
+        // conversion requires a string `command` field. Not specific to
+        // helm; serves as the regression net for the local path.
+        let fn_call = OpenRouterToolCallFunction {
+            name: "run_shell_command".to_string(),
+            arguments: "{ not json".to_string(),
+        };
+        assert!(openrouter_function_to_warp_tool(&fn_call, false).is_none());
+    }
+
+    #[test]
+    fn openrouter_non_shell_function_call_passes_through_for_helm_remote() {
+        // Non-shell server function calls are unaffected by the helm
+        // guard — they ride into the request stream as a generic
+        // `Tool::Server` envelope regardless of binding. Only shell
+        // tools are denied.
+        let fn_call = server_function_call("custom_tool", r#"{"x": 1}"#);
+        let converted =
+            openrouter_function_to_warp_tool(&fn_call, /* is_helm_remote */ true);
+        assert!(
+            converted.is_some(),
+            "non-shell tool calls must pass through the helm guard"
+        );
+    }
+
+    #[test]
+    fn openrouter_non_shell_function_call_passes_through_for_local_byok() {
+        let fn_call = server_function_call("custom_tool", r#"{"x": 1}"#);
+        let converted =
+            openrouter_function_to_warp_tool(&fn_call, /* is_helm_remote */ false);
+        assert!(converted.is_some());
+    }
+
+    // The supported-tools strip upstream is wired via `supported_tools`;
+    // verify it omits run_shell_command when the request has no
+    // supported_tools settings (the BYOK default) and includes it when
+    // the bit is set. Belt-and-braces test that documents the layered
+    // defense: even if the conversion guard has a future regression, the
+    // model will not be told the tool exists.
+    #[test]
+    fn supported_tools_omits_run_shell_command_when_unsupported() {
+        let request = warp_multi_agent_api::Request::default();
+        let tools = supported_tools(&request);
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|t| t.function.name.as_str())
+            .collect();
+        assert!(
+            !names.contains(&"run_shell_command"),
+            "no supported_tools bit set → tool must not be advertised"
+        );
+    }
+
+    #[test]
+    fn supported_tools_includes_run_shell_command_when_bit_set() {
+        let mut request = warp_multi_agent_api::Request::default();
+        request.settings = Some(warp_multi_agent_api::request::Settings {
+            supported_tools: vec![warp_multi_agent_api::ToolType::RunShellCommand as i32],
+            ..Default::default()
+        });
+        let tools = supported_tools(&request);
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|t| t.function.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"run_shell_command"),
+            "RunShellCommand bit set → tool advertised"
+        );
+    }
+
+    // hw-ek5: build_openrouter_request strips run_shell_command for a
+    // helm-remote request even when the upstream bit is set. The
+    // conversion guard above is the second line of defense; this one is
+    // the first — the model never even sees the tool.
+    #[test]
+    fn build_openrouter_request_strips_run_shell_command_for_helm_remote() {
+        let mut request = warp_multi_agent_api::Request::default();
+        request.settings = Some(warp_multi_agent_api::request::Settings {
+            supported_tools: vec![warp_multi_agent_api::ToolType::RunShellCommand as i32],
+            ..Default::default()
+        });
+        let built = build_openrouter_request(
+            &request,
+            DEFAULT_OPENROUTER_MODEL.to_string(),
+            /* is_helm_remote */ true,
+        );
+        let names: Vec<&str> = built
+            .tools
+            .iter()
+            .map(|t| t.function.name.as_str())
+            .collect();
+        assert!(
+            !names.contains(&"run_shell_command"),
+            "helm-remote must never advertise run_shell_command (hw-ek5)"
+        );
+    }
+
+    #[test]
+    fn build_openrouter_request_keeps_run_shell_command_for_local_byok() {
+        let mut request = warp_multi_agent_api::Request::default();
+        request.settings = Some(warp_multi_agent_api::request::Settings {
+            supported_tools: vec![warp_multi_agent_api::ToolType::RunShellCommand as i32],
+            ..Default::default()
+        });
+        let built = build_openrouter_request(
+            &request,
+            DEFAULT_OPENROUTER_MODEL.to_string(),
+            /* is_helm_remote */ false,
+        );
+        let names: Vec<&str> = built
+            .tools
+            .iter()
+            .map(|t| t.function.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"run_shell_command"),
+            "local BYOK must keep run_shell_command when the bit is set"
+        );
+    }
 }
