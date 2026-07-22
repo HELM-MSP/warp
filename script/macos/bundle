@@ -273,6 +273,11 @@ if [[ $RELEASE_CHANNEL = "local" ]]; then
     BUNDLE_ID="dev.warp.Warp-Local"
     WARP_APP_NAME="WarpLocal"
     WARP_SCHEME_NAME="warplocal"
+    # Local builds also claim the helm-warp deep-link scheme so Portal-launched
+    # `helm-warp://connect?...` URLs route into the local channel. The
+    # scheme is a constant in `warp_core::channel::helm_warp::SCHEME`; keep
+    # this string in sync.
+    WARP_EXTRA_SCHEME_NAME="helm-warp"
     FEATURES="$FEATURES,agent_mode_debug"
     # For local builds, use different versions of our bundled frameworks (e.g.:
     # Sentry).  This needs to be exported so it can be referenced by
@@ -409,6 +414,11 @@ if [[ "$ARTIFACT" == "app" ]]; then
 
   export WARP_SCHEME_NAME
   export WARP_PLIST_PATH="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Info.plist"
+  if [[ -n "$WARP_EXTRA_SCHEME_NAME" ]]; then
+    export WARP_EXTRA_SCHEME_NAME
+  else
+    unset WARP_EXTRA_SCHEME_NAME
+  fi
   ./script/update_plist
 
   if [[ $REGISTER_SERVICES = true ]]; then

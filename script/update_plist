@@ -48,7 +48,16 @@ if [[ -n "$WARP_SCHEME_NAME" ]]; then
   echo "Updating plist to support a custom url scheme"
   # Update the plist that cargo bundle creates to add support for custom URL schemes. Unfortunately, cargo bundle does not support
   # setting arbitrary plist fields, so we must do this after the fact.
-  plutil -insert CFBundleURLTypes -xml "<array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>$WARP_SCHEME_NAME</string></array></dict></array>" "$WARP_PLIST_PATH"
+  # When WARP_EXTRA_SCHEME_NAME is set, register both schemes under separate
+  # CFBundleURLTypes entries. This is how the local channel claims BOTH its
+  # primary scheme (e.g. warplocal) AND the helm-warp deep-link scheme so the
+  # OS routes helm-warp://connect?... URLs to this build.
+  if [[ -n "$WARP_EXTRA_SCHEME_NAME" ]]; then
+    echo "Also registering extra scheme: $WARP_EXTRA_SCHEME_NAME"
+    plutil -insert CFBundleURLTypes -xml "<array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>$WARP_SCHEME_NAME</string></array></dict><dict><key>CFBundleURLName</key><string>Helm-Warp</string><key>CFBundleURLSchemes</key><array><string>$WARP_EXTRA_SCHEME_NAME</string></array></dict></array>" "$WARP_PLIST_PATH"
+  else
+    plutil -insert CFBundleURLTypes -xml "<array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>$WARP_SCHEME_NAME</string></array></dict></array>" "$WARP_PLIST_PATH"
+  fi
 fi
 
 if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then

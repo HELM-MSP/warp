@@ -24,9 +24,17 @@ cd "${REPO_ROOT}"
 if [ "$WARP_CHANNEL" = "local" ]; then
     WARP_APP_PATH="target/debug/bundle/osx/WarpLocal.app"
     WARP_SCHEME_NAME="warplocal"
+    # Local dev runs also need the helm-warp scheme so clicking a Portal
+    # helm-warp://connect?… link during a developer's local session routes
+    # into this app build. See `script/macos/bundle` for the matching
+    # production-bundle setting.
+    WARP_EXTRA_SCHEME_NAME="helm-warp"
 else
     WARP_APP_PATH="target/debug/bundle/osx/WarpOss.app"
     WARP_SCHEME_NAME="warposs"
+    # OSS must not claim helm-warp — that scheme is reserved for the
+    # internal Portal deep-link flow and is locally-scoped to Channel::Local.
+    unset WARP_EXTRA_SCHEME_NAME
 fi
 DONT_OPEN=false
 # Launches the binary with "open", meaning the Warp process is
@@ -110,6 +118,11 @@ install_name_tool -add_rpath "@executable_path/../Frameworks" "$WARP_APP_PATH/Co
 
 export WARP_SCHEME_NAME
 export WARP_PLIST_PATH="$WARP_APP_PATH/Contents/Info.plist"
+if [[ -n "${WARP_EXTRA_SCHEME_NAME:-}" ]]; then
+    export WARP_EXTRA_SCHEME_NAME
+else
+    unset WARP_EXTRA_SCHEME_NAME
+fi
 ./script/update_plist
 
 echo "Preparing bundled resources..."

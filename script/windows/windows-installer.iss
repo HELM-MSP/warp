@@ -110,6 +110,24 @@ Source: "{#TargetProfileDir}\resources\*"; DestDir: "{app}\resources"; Flags: ig
 [Registry]
 Root: HKCU; Subkey: "SOFTWARE\Warp.dev\{#MyAppName}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "SOFTWARE\Warp.dev\{#MyAppName}"; ValueType: string; ValueName: "InstallationPath"; ValueData: "{app}\{#MyAppExeName}"; Flags: uninsdeletevalue
+; The primary channel scheme (e.g. warplocal) is registered by the Warp
+; runtime on first launch via app/src/app_services/windows/registry.rs.
+; We do NOT duplicate that here, because {#MyAppName} is the human-readable
+; bundle name (e.g. "WarpLocal") and would otherwise register an unrelated
+; scheme. The helm-warp block below is pre-registered by the installer so
+; the scheme is present before the user has launched the app themselves;
+; the runtime reasserts it (and the primary scheme) on every launch.
+#if ReleaseChannel == "local"
+; Local-channel installs also claim the helm-warp deep-link scheme so that
+; `helm-warp://connect?...` URLs from the internal Portal route into this
+; build even before the user has launched the app themselves. The runtime
+; register_uri_handler reasserts both helm-warp and the primary scheme on
+; launch.
+Root: HKCU; Subkey: "Software\Classes\helm-warp"; ValueType: string; ValueName: ""; ValueData: "Helm-Warp"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\helm-warp"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\helm-warp\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\icon.ico,0"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\helm-warp\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
+#endif
 ; cleanup "Open Warp Here" registry entries
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}"; Flags: deletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}"; Flags: deletekey

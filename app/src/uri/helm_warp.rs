@@ -9,7 +9,7 @@ use crate::server::server_api::helm_tab_binding::{
 };
 use crate::workspace::{HelmExchangeCode, WorkspaceAction};
 
-pub const SCHEME: &str = "helm-warp";
+pub use warp_core::channel::helm_warp::SCHEME;
 
 pub fn is_helm_warp_url(url: &Url) -> bool {
     url.scheme() == SCHEME

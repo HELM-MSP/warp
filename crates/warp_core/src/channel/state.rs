@@ -378,15 +378,13 @@ impl ChannelState {
     }
 
     pub fn url_scheme() -> &'static str {
-        match Self::channel() {
-            Channel::Stable => "warp",
-            Channel::Preview => "warppreview",
-            Channel::Dev => "warpdev",
-            // Dummy value--integration tests shouldn't support URL schemes.
-            Channel::Integration => "warpintegration",
-            Channel::Local => "warplocal",
-            Channel::Oss => "warposs",
-        }
+        Self::channel().url_scheme()
+    }
+
+    /// URL schemes this channel wants OS-level handlers registered for.
+    /// See [`Channel::url_schemes`] for the full rationale.
+    pub fn url_schemes() -> &'static [&'static str] {
+        Self::channel().url_schemes()
     }
 }
 

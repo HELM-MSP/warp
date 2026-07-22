@@ -22,7 +22,21 @@ pub(super) fn register_uri_handler() {
     //      open
     //         command
     //            (Default) = "{path_to_executable}" "%0"
-    let uri_scheme = ChannelState::url_scheme();
+    //
+    // Register every scheme this channel claims. Today only `Channel::Local`
+    // ships the helm-warp deep-link alongside its primary scheme; other
+    // channels register only the channel scheme and skip helm-warp. This
+    // mirrors the Info.plist CFBundleURLTypes configuration on macOS and keeps
+    // Windows behavior consistent with the rest of the packaging.
+    for uri_scheme in ChannelState::url_schemes() {
+        register_single_scheme(&classes_key, uri_scheme);
+    }
+}
+
+fn register_single_scheme(
+    classes_key: &windows_registry::Key,
+    uri_scheme: &str,
+) {
     match classes_key.create(uri_scheme) {
         Ok(parent_key) => {
             // The empty string represents the "(Default)" value for a registry key.
@@ -68,3 +82,4 @@ pub(super) fn register_uri_handler() {
         }
     }
 }
+
